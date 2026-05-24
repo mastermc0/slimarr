@@ -116,6 +116,8 @@ See `docs/DOCKER.md` for full deployment guidance.
 - **Toast notifications** - non-intrusive feedback for every action
 - **Recycling bin controls** - optionally move originals to a configured directory, monitor live usage in Settings, and empty it on demand
 - **Duplicate file cleanup** - detect and remove inferior duplicate copies within your Plex library
+- **Duplicate cleanup preview** - estimates reclaimable space and confidence before any file action
+- **Maintenance Intelligence** - telemetry-aware utilities score with safe, transparent recommendations
 - **TV Show Stale Media Sweeper** - Slimarr surfaces never-watched or long-unwatched TV shows with their disk footprint so *you* can decide what to delete; optionally unmonitors in Sonarr to prevent re-download
 - **System tray** - runs as a Windows tray app with one-click open browser
 - **Activity log** - full history of every replacement with old/new size and savings %
@@ -493,6 +495,19 @@ The **TV Shows** page lets you explore your Plex TV library by disk usage and wa
 
 ### 7. Duplicate File Cleanup
 The System page includes a one-click **Find Duplicates** tool. Slimarr scans Plex for movies that have multiple file copies, scores them by resolution and codec quality, and deletes the inferior copies - keeping the best version.
+
+### 8. Utilities Maintenance Intelligence
+The System page now includes a **Maintenance Intelligence** panel that combines utility telemetry with health signals to provide:
+- A transparent maintenance score and state
+- Safe recommendations tied to observable telemetry
+- Duplicate cleanup previews with reclaimable-byte estimates and confidence buckets
+
+Duplicate cleanup now follows a safer flow:
+1. Preview candidates and estimated reclaimable space
+2. Review confidence and sample titles
+3. Explicitly confirm cleanup before any delete/recycle action
+
+This keeps optimization actions technically honest, non-destructive by default, and aligned with real system state.
 
 ---
 

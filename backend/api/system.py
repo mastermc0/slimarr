@@ -22,6 +22,7 @@ from starlette.background import BackgroundTask
 from backend.api.models import (
     ActionStatusResponse,
     DecisionAuditItem,
+    DuplicateCleanupPreviewResponse,
     HealthMatrixResponse,
     IntegrationMatrixResponse,
     PreflightResponse,
@@ -34,6 +35,7 @@ from backend.api.models import (
     SystemHealthResponse,
     SystemInfoResponse,
     SystemStatusResponse,
+    UtilitiesMaintenanceInsightsResponse,
     UpdateCheckResponse,
 )
 from backend.auth.dependencies import get_current_user
@@ -691,13 +693,168 @@ async def trigger_scan(background: BackgroundTasks, user=Depends(get_current_use
 
 
 @router.post("/cleanup", response_model=ActionStatusResponse)
-async def trigger_cleanup(background: BackgroundTasks, user=Depends(get_current_user)):
+async def trigger_cleanup(
+    background: BackgroundTasks,
+    confirm: bool = Query(default=False),
+    user=Depends(get_current_user),
+):
     """Trigger a duplicate file cleanup in the library."""
     from backend.core.cleanup import scan_and_clean_duplicates
+
+    if not confirm:
+        return {"status": "confirmation_required"}
+
     started = await _start_guarded_background_task("cleanup_duplicates", background, scan_and_clean_duplicates)
     if not started:
         return {"status": "already_running"}
     return {"status": "cleanup_started"}
+
+
+@router.get("/cleanup/preview", response_model=DuplicateCleanupPreviewResponse)
+async def cleanup_preview(user=Depends(get_current_user)):
+    """Preview duplicate cleanup impact without deleting any file."""
+    from backend.core.cleanup import preview_duplicate_cleanup
+
+    return await preview_duplicate_cleanup()
+
+
+@router.get("/utilities/maintenance-insights", response_model=UtilitiesMaintenanceInsightsResponse)
+async def utilities_maintenance_insights(user=Depends(get_current_user)):
+    """Return telemetry-aware utility maintenance score and safe recommendations."""
+    from backend.core.cleanup import preview_duplicate_cleanup
+    from backend.core.search_diagnostics import degradation_status
+
+    health = await health_matrix(user)
+    recycle = await recycling_bin_info(user)
+    duplicate_preview = await preview_duplicate_cleanup(max_movies_per_section=250)
+    search_state = degradation_status()
+
+    score = 100.0
+    signals: list[dict[str, Any]] = []
+    recommendations: list[dict[str, Any]] = []
+
+    health_status = str(health.get("status") or "unknown")
+    if health_status == "down":
+        score -= 35.0
+    elif health_status == "degraded":
+        score -= 15.0
+    signals.append(
+        {
+            "key": "system_health",
+            "state": health_status,
+            "impact": -35 if health_status == "down" else (-15 if health_status == "degraded" else 0),
+            "detail": "Derived from API, DB, scheduler, queue, integrations, and search pipeline health.",
+        }
+    )
+
+    if search_state.get("degraded"):
+        score -= 8.0
+        signals.append(
+            {
+                "key": "search_pipeline",
+                "state": "degraded",
+                "impact": -8,
+                "detail": "; ".join(search_state.get("reasons") or ["Search degradation detected"]),
+            }
+        )
+        recommendations.append(
+            {
+                "priority": "high",
+                "category": "Reliability",
+                "title": "Resolve search degradation before heavy maintenance",
+                "detail": "Utility actions are safest and most effective when indexer/search telemetry is healthy.",
+            }
+        )
+
+    reclaimable = int(duplicate_preview.get("estimated_reclaimable_bytes") or 0)
+    duplicates_found = int(duplicate_preview.get("duplicates_found") or 0)
+    if duplicates_found > 0:
+        duplicate_penalty = min(18.0, float(duplicates_found) / 3.0)
+        score -= duplicate_penalty
+        signals.append(
+            {
+                "key": "duplicate_media",
+                "state": "actionable",
+                "impact": -round(duplicate_penalty, 1),
+                "detail": f"{duplicates_found} duplicate titles; estimated reclaimable {reclaimable} bytes.",
+            }
+        )
+        recommendations.append(
+            {
+                "priority": "medium",
+                "category": "Storage",
+                "title": "Review duplicate cleanup preview",
+                "detail": "Run cleanup only after checking confidence and sample entries in preview mode.",
+            }
+        )
+    else:
+        signals.append(
+            {
+                "key": "duplicate_media",
+                "state": "clean",
+                "impact": 0,
+                "detail": "No duplicate media candidates detected in sampled scan.",
+            }
+        )
+
+    recycling_enabled = bool(recycle.get("enabled"))
+    recycling_files = int(recycle.get("files") or 0)
+    recycling_bytes = int(recycle.get("bytes") or 0)
+    if recycling_enabled and recycling_files > 0:
+        recycle_penalty = min(12.0, recycling_bytes / float(8 * 1024 * 1024 * 1024))
+        score -= recycle_penalty
+        signals.append(
+            {
+                "key": "recycling_backlog",
+                "state": "pending",
+                "impact": -round(recycle_penalty, 1),
+                "detail": f"{recycling_files} files waiting in recycling folder.",
+            }
+        )
+        recommendations.append(
+            {
+                "priority": "low",
+                "category": "Storage",
+                "title": "Review recycling folder retention",
+                "detail": "Purge only when rollback copies are no longer needed.",
+            }
+        )
+    else:
+        signals.append(
+            {
+                "key": "recycling_backlog",
+                "state": "clear",
+                "impact": 0,
+                "detail": "No recycle backlog detected.",
+            }
+        )
+
+    score = max(0.0, min(100.0, round(score, 1)))
+    if score >= 85:
+        state = "excellent"
+    elif score >= 70:
+        state = "good"
+    elif score >= 50:
+        state = "attention"
+    else:
+        state = "critical"
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "maintenance_score": score,
+        "maintenance_state": state,
+        "signals": signals,
+        "recommendations": recommendations,
+        "telemetry": {
+            "health_status": health_status,
+            "search_degraded": bool(search_state.get("degraded")),
+            "duplicates_found": duplicates_found,
+            "estimated_reclaimable_bytes": reclaimable,
+            "recycling_files": recycling_files,
+            "recycling_bytes": recycling_bytes,
+            "sample_truncated": bool(duplicate_preview.get("truncated")),
+        },
+    }
 
 
 @router.post("/cycle/start", response_model=ActionStatusResponse)

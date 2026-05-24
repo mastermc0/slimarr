@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { useSocket } from '@/hooks/useSocket'
 import { useToast } from '@/components/Toast'
-import type { DecisionAuditEntry, HealthMatrix, PreflightResult } from '@/lib/types'
-import { Play, Square, RefreshCw, Database, Clock, Server, CheckCircle, XCircle, Trash2, ArrowUpCircle, ShieldCheck } from 'lucide-react'
+import type { DecisionAuditEntry, DuplicateCleanupPreview, HealthMatrix, PreflightResult, UtilitiesMaintenanceInsights } from '@/lib/types'
+import { Play, Square, RefreshCw, Database, Clock, Server, CheckCircle, XCircle, Trash2, ArrowUpCircle, ShieldCheck, Sparkles, GaugeCircle, HardDrive, ShieldAlert } from 'lucide-react'
 
 interface ServiceHealth {
   success: boolean
@@ -44,6 +44,10 @@ function fmtBytes(b: number) {
   return `${(b / 1073741824).toFixed(2)} GB`
 }
 
+function fmtPct(value: number) {
+  return `${Math.max(0, Math.min(100, value)).toFixed(0)}%`
+}
+
 interface SystemInfo {
   version: string
   python: string
@@ -69,11 +73,24 @@ export default function System() {
   const [recyclingPurging, setRecyclingPurging] = useState(false)
   const [preflight, setPreflight] = useState<PreflightResult | null>(null)
   const [preflightLoading, setPreflightLoading] = useState(false)
+  const [cleanupPreview, setCleanupPreview] = useState<DuplicateCleanupPreview | null>(null)
+  const [cleanupPreviewLoading, setCleanupPreviewLoading] = useState(false)
+  const [maintenanceInsights, setMaintenanceInsights] = useState<UtilitiesMaintenanceInsights | null>(null)
 
   const loadStatus = () => api.systemStatus().then(setStatus).catch(() => {})
   const loadServices = () => api.servicesHealth().then(setServices).catch(() => {})
   const loadHealthMatrix = () => api.healthMatrix().then(setHealthMatrix).catch(() => {})
   const loadDecisionAudit = () => api.decisionAudit({ limit: 8 }).then((rows) => setDecisionAudit(rows as DecisionAuditEntry[])).catch(() => {})
+  const loadCleanupPreview = (showLoading = false) => {
+    if (showLoading) setCleanupPreviewLoading(true)
+    return api.cleanupPreview()
+      .then((data) => setCleanupPreview(data as DuplicateCleanupPreview))
+      .catch(() => {})
+      .finally(() => {
+        if (showLoading) setCleanupPreviewLoading(false)
+      })
+  }
+  const loadMaintenanceInsights = () => api.utilitiesMaintenanceInsights().then((data) => setMaintenanceInsights(data as UtilitiesMaintenanceInsights)).catch(() => {})
   const loadRecyclingInfo = (showLoading = false) => {
     if (showLoading) setRecyclingLoading(true)
     return api.recyclingBinInfo()
@@ -92,20 +109,35 @@ export default function System() {
     loadServices()
     loadHealthMatrix()
     loadDecisionAudit()
+    void loadCleanupPreview(true)
+    loadMaintenanceInsights()
     void loadRecyclingInfo(true)
     const iv = setInterval(loadStatus, 10000)
-    const recycleIv = setInterval(() => { void loadRecyclingInfo() }, 15000)
-    const servicesIv = setInterval(loadServices, 30000)
-    const matrixIv = setInterval(loadHealthMatrix, 30000)
-    const auditIv = setInterval(loadDecisionAudit, 30000)
+    const recycleIv = setInterval(() => {
+      if (!document.hidden) {
+        void loadRecyclingInfo()
+      }
+    }, 15000)
+    const servicesIv = setInterval(() => {
+      if (!document.hidden) {
+        loadServices()
+        loadHealthMatrix()
+        loadDecisionAudit()
+        loadMaintenanceInsights()
+      }
+    }, 30000)
+    const previewIv = setInterval(() => {
+      if (!document.hidden && !cleaning) {
+        void loadCleanupPreview()
+      }
+    }, 45000)
     return () => {
       clearInterval(iv)
       clearInterval(recycleIv)
       clearInterval(servicesIv)
-      clearInterval(matrixIv)
-      clearInterval(auditIv)
+      clearInterval(previewIv)
     }
-  }, [])
+  }, [cleaning])
 
   useSocket('scan:started', () => setScanning(true))
   useSocket('scan:completed', () => { setScanning(false); loadStatus() })
@@ -178,8 +210,24 @@ export default function System() {
   const cleanDuplicates = async () => {
     setCleaning(true)
     try {
-      await api.cleanupDuplicates()
-      toast('Duplicate scan started — check logs for results', 'info')
+      const previewState = cleanupPreview ?? await api.cleanupPreview() as DuplicateCleanupPreview
+      const reclaimable = previewState?.estimated_reclaimable_bytes ?? 0
+      const duplicates = previewState?.duplicates_found ?? 0
+      const confirmed = window.confirm(
+        `Start duplicate cleanup?\n\nPotential duplicates: ${duplicates}\nEstimated reclaimable: ${fmtBytes(reclaimable)}\n\nThis operation may move files to your recycling folder (if configured) or delete them permanently.`
+      )
+      if (!confirmed) {
+        setCleaning(false)
+        return
+      }
+      const result = await api.cleanupDuplicates(true) as { status?: string }
+      if (result?.status === 'confirmation_required') {
+        toast('Cleanup requires explicit confirmation', 'error')
+      } else {
+        toast('Duplicate cleanup started — check logs for detailed progress', 'info')
+      }
+      void loadCleanupPreview()
+      loadMaintenanceInsights()
     } catch { toast('Failed to start duplicate scan', 'error') }
     setTimeout(() => setCleaning(false), 8000)
   }
@@ -209,6 +257,8 @@ export default function System() {
   const cycle = (status?.cycle as Record<string, boolean>) ?? {}
   const jobs = (status?.jobs as Array<{ id: string; next_run: string }>) ?? []
   const healthComponents = Object.entries(healthMatrix?.components ?? {})
+  const confidence = cleanupPreview?.confidence ?? {}
+  const confidenceTotal = (confidence.high ?? 0) + (confidence.medium ?? 0) + (confidence.low ?? 0)
 
   const matrixStatusClass = (value?: string) => {
     if (value === 'healthy') return 'text-green-400'
@@ -223,9 +273,60 @@ export default function System() {
     return 'text-red-400'
   }
 
+  const maintenanceStateClass = useMemo(() => {
+    const state = maintenanceInsights?.maintenance_state
+    if (state === 'excellent') return 'text-emerald-300'
+    if (state === 'good') return 'text-cyan-300'
+    if (state === 'attention') return 'text-amber-300'
+    return 'text-rose-300'
+  }, [maintenanceInsights?.maintenance_state])
+
   return (
     <div className="space-y-6 max-w-2xl">
       <h1 className="text-2xl font-bold">System</h1>
+
+      <div className="rounded-2xl border border-cyan-500/30 bg-[linear-gradient(135deg,rgba(8,47,73,0.7),rgba(17,24,39,0.92),rgba(67,20,7,0.4))] p-5 shadow-[0_18px_60px_rgba(3,7,18,0.45)]">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-cyan-200/80">Maintenance Intelligence</p>
+            <h2 className="mt-1 text-lg font-semibold text-white">Premium Utilities Health</h2>
+            <p className="mt-1 text-xs text-gray-300">Telemetry-aware maintenance scoring with safe-action recommendations.</p>
+          </div>
+          <button
+            onClick={loadMaintenanceInsights}
+            className="flex items-center gap-1 rounded-md border border-cyan-400/40 px-2.5 py-1 text-xs text-cyan-200 hover:bg-cyan-500/10"
+          >
+            <RefreshCw size={12} /> Refresh
+          </button>
+        </div>
+        <div className="mt-4 grid grid-cols-3 gap-3">
+          <div className="rounded-xl border border-gray-700/70 bg-gray-900/55 p-3">
+            <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-gray-400"><GaugeCircle size={12} /> Score</div>
+            <p className={`mt-1 text-2xl font-bold ${maintenanceStateClass}`}>{fmtPct(maintenanceInsights?.maintenance_score ?? 0)}</p>
+            <p className="text-[11px] text-gray-400">{maintenanceInsights?.maintenance_state ?? 'unknown'}</p>
+          </div>
+          <div className="rounded-xl border border-gray-700/70 bg-gray-900/55 p-3">
+            <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-gray-400"><HardDrive size={12} /> Reclaimable</div>
+            <p className="mt-1 text-xl font-semibold text-white">{fmtBytes(cleanupPreview?.estimated_reclaimable_bytes ?? 0)}</p>
+            <p className="text-[11px] text-gray-400">from {cleanupPreview?.duplicates_found ?? 0} duplicate titles</p>
+          </div>
+          <div className="rounded-xl border border-gray-700/70 bg-gray-900/55 p-3">
+            <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-gray-400"><Sparkles size={12} /> Confidence</div>
+            <p className="mt-1 text-xl font-semibold text-white">{confidenceTotal}</p>
+            <p className="text-[11px] text-gray-400">high {confidence.high ?? 0} · medium {confidence.medium ?? 0} · low {confidence.low ?? 0}</p>
+          </div>
+        </div>
+        {(maintenanceInsights?.recommendations?.length ?? 0) > 0 && (
+          <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3">
+            <p className="text-xs font-medium text-amber-200">Recommended next actions</p>
+            <div className="mt-1.5 space-y-1">
+              {maintenanceInsights?.recommendations.slice(0, 2).map((item) => (
+                <p key={`${item.title}-${item.priority}`} className="text-xs text-amber-100/90">{item.title}: {item.detail}</p>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* System info */}
       {info && (
@@ -479,19 +580,55 @@ export default function System() {
 
       {/* Duplicate cleanup */}
       <div className="bg-gray-900 rounded-xl p-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+        <div className="min-w-0">
           <h2 className="font-semibold">Duplicate File Cleanup</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Find movies with multiple files and delete the lower-quality copy. Uses your recycling bin if configured.</p>
+          <p className="text-xs text-gray-400 mt-0.5">Preview-first workflow. Estimate reclaimable space and confidence before any deletion or recycle action.</p>
+          {cleanupPreview?.status === 'ok' && (
+            <p className="text-xs text-gray-500 mt-1">
+              {cleanupPreview.duplicates_found} duplicate titles · {fmtBytes(cleanupPreview.estimated_reclaimable_bytes)} recoverable
+              {cleanupPreview.truncated ? ' (sampled scan)' : ''}
+            </p>
+          )}
+          {cleanupPreview?.status === 'error' && (
+            <p className="text-xs text-rose-300 mt-1">Preview error: {cleanupPreview.reason ?? 'Unknown error'}</p>
+          )}
         </div>
-        <button
-          onClick={cleanDuplicates}
-          disabled={cleaning}
-          className="flex items-center justify-center gap-2 px-3 py-1.5 rounded bg-gray-700 text-sm hover:bg-gray-600 disabled:opacity-50"
-        >
-          <Trash2 size={14} className={cleaning ? 'animate-pulse' : ''} />
-          {cleaning ? 'Scanning…' : 'Find Duplicates'}
-        </button>
+        <div className="flex gap-2 w-full sm:w-auto">
+          <button
+            onClick={() => { void loadCleanupPreview(true) }}
+            disabled={cleanupPreviewLoading || cleaning}
+            className="flex flex-1 items-center justify-center gap-2 px-3 py-1.5 rounded bg-gray-700 text-sm hover:bg-gray-600 disabled:opacity-50 sm:flex-none"
+          >
+            <RefreshCw size={14} className={cleanupPreviewLoading ? 'animate-spin' : ''} />
+            {cleanupPreviewLoading ? 'Loading…' : 'Preview'}
+          </button>
+          <button
+            onClick={cleanDuplicates}
+            disabled={cleaning}
+            className="flex flex-1 items-center justify-center gap-2 px-3 py-1.5 rounded bg-gray-100 text-gray-900 text-sm hover:bg-white disabled:opacity-50 sm:flex-none"
+          >
+            <ShieldAlert size={14} className={cleaning ? 'animate-pulse' : ''} />
+            {cleaning ? 'Starting…' : 'Run Safe Cleanup'}
+          </button>
+        </div>
       </div>
+
+      {cleanupPreview?.sample?.length ? (
+        <div className="bg-gray-900 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-800 text-sm font-semibold">Duplicate Preview Samples</div>
+          <div className="divide-y divide-gray-800">
+            {cleanupPreview.sample.slice(0, 6).map((item) => (
+              <div key={`${item.title}-${item.best_file}`} className="px-4 py-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-medium truncate">{item.title}</p>
+                  <span className="text-xs text-gray-400">{item.duplicate_count} extra file(s)</span>
+                </div>
+                <p className="text-xs text-gray-400 mt-0.5">{fmtBytes(item.estimated_reclaimable_bytes)} reclaimable · confidence {item.confidence}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {/* Automation cycle */}
       <div className="bg-gray-900 rounded-xl p-5 space-y-4">

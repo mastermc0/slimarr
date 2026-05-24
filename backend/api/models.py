@@ -286,6 +286,34 @@ class RecyclingBinEmptyResponse(BaseModel):
     freed_bytes: int
 
 
+class DuplicateCleanupSampleItem(BaseModel):
+    title: str
+    best_file: str
+    duplicate_count: int
+    estimated_reclaimable_bytes: int
+    confidence: str
+
+
+class DuplicateCleanupPreviewResponse(BaseModel):
+    status: str
+    reason: str | None = None
+    movies_scanned: int
+    duplicates_found: int
+    estimated_reclaimable_bytes: int
+    confidence: dict[str, int]
+    sample: list[DuplicateCleanupSampleItem] = Field(default_factory=list)
+    truncated: bool = False
+
+
+class UtilitiesMaintenanceInsightsResponse(BaseModel):
+    generated_at: str
+    maintenance_score: float
+    maintenance_state: str
+    signals: list[dict[str, Any]]
+    recommendations: list[dict[str, Any]]
+    telemetry: dict[str, Any]
+
+
 class SystemStatusResponse(BaseModel):
     cycle: dict[str, Any]
     scheduler_running: bool

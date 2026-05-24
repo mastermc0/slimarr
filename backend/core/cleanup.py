@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from typing import Any
 from loguru import logger
 
 from backend.config import get_config
@@ -20,6 +21,130 @@ def _part_score(p: dict) -> tuple:
     res_rank = get_resolution_rank(p["resolution"])
     codec_rank = get_codec_rank(p["codec"])
     return (res_rank, codec_rank, -p["size"])
+
+
+def _duplicate_confidence(best_part: dict[str, Any], inferior: dict[str, Any]) -> str:
+    """Estimate how confidently an inferior copy can be removed."""
+    best_res = get_resolution_rank(str(best_part.get("resolution") or ""))
+    inf_res = get_resolution_rank(str(inferior.get("resolution") or ""))
+    best_codec = get_codec_rank(str(best_part.get("codec") or ""))
+    inf_codec = get_codec_rank(str(inferior.get("codec") or ""))
+
+    # High confidence when quality is clearly lower.
+    if inf_res < best_res or (inf_res == best_res and inf_codec < best_codec):
+        return "high"
+    # Medium confidence when quality appears equal and file is larger.
+    if inf_res == best_res and inf_codec == best_codec:
+        return "medium"
+    return "low"
+
+
+def _collect_movie_parts(plex_movie) -> list[dict[str, Any]]:
+    """Collect physical media parts for a Plex movie item."""
+    movie_parts: list[dict[str, Any]] = []
+    for media in plex_movie.media:
+        for part in media.parts:
+            if part.file and os.path.exists(part.file):
+                movie_parts.append(
+                    {
+                        "file": part.file,
+                        "size": part.size or os.path.getsize(part.file),
+                        "resolution": str(media.videoResolution or ""),
+                        "codec": str(media.videoCodec or ""),
+                    }
+                )
+    return movie_parts
+
+
+async def preview_duplicate_cleanup(max_movies_per_section: int = 500) -> dict[str, Any]:
+    """Scan duplicates without deleting anything and return safe cleanup estimates."""
+    from backend.integrations.plex import PlexClient
+
+    config = get_config()
+    if not config.plex.url or not config.plex.token:
+        return {
+            "status": "unavailable",
+            "reason": "Plex not configured",
+            "movies_scanned": 0,
+            "duplicates_found": 0,
+            "estimated_reclaimable_bytes": 0,
+            "confidence": {"high": 0, "medium": 0, "low": 0},
+            "sample": [],
+        }
+
+    plex = PlexClient()
+    try:
+        server = plex._get_server()
+    except Exception as e:
+        logger.error(f"Plex connection failed during duplicate preview: {e}")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "movies_scanned": 0,
+            "duplicates_found": 0,
+            "estimated_reclaimable_bytes": 0,
+            "confidence": {"high": 0, "medium": 0, "low": 0},
+            "sample": [],
+        }
+
+    sections = plex.library_sections or [s.title for s in server.library.sections() if s.type == "movie"]
+    summary: dict[str, Any] = {
+        "status": "ok",
+        "movies_scanned": 0,
+        "duplicates_found": 0,
+        "estimated_reclaimable_bytes": 0,
+        "confidence": {"high": 0, "medium": 0, "low": 0},
+        "sample": [],
+        "truncated": False,
+    }
+
+    for section_name in sections:
+        try:
+            section = server.library.section(section_name)
+        except Exception as e:
+            logger.warning(f"Could not load section {section_name} for duplicate preview: {e}")
+            continue
+
+        for index, plex_movie in enumerate(section.all()):
+            if index >= max_movies_per_section:
+                summary["truncated"] = True
+                break
+
+            summary["movies_scanned"] += 1
+            movie_parts = _collect_movie_parts(plex_movie)
+            if len(movie_parts) <= 1:
+                continue
+
+            sorted_parts = sorted(movie_parts, key=_part_score, reverse=True)
+            best_part = sorted_parts[0]
+            inferiors = sorted_parts[1:]
+
+            reclaimable = 0
+            confidence_bucket = "high"
+            for inf in inferiors:
+                reclaimable += int(inf.get("size") or 0)
+                conf = _duplicate_confidence(best_part, inf)
+                summary["confidence"][conf] += 1
+                if conf == "low":
+                    confidence_bucket = "low"
+                elif conf == "medium" and confidence_bucket != "low":
+                    confidence_bucket = "medium"
+
+            summary["duplicates_found"] += 1
+            summary["estimated_reclaimable_bytes"] += reclaimable
+
+            if len(summary["sample"]) < 12:
+                summary["sample"].append(
+                    {
+                        "title": plex_movie.title,
+                        "best_file": best_part["file"],
+                        "duplicate_count": len(inferiors),
+                        "estimated_reclaimable_bytes": reclaimable,
+                        "confidence": confidence_bucket,
+                    }
+                )
+
+    return summary
 
 async def scan_and_clean_duplicates() -> dict:
     """
@@ -64,17 +189,7 @@ async def scan_and_clean_duplicates() -> dict:
         for plex_movie in section.all():
             summary["movies_scanned"] += 1
 
-            # Gather all physical parts belonging to this movie
-            movie_parts = []
-            for media in plex_movie.media:
-                for part in media.parts:
-                    if part.file and os.path.exists(part.file):
-                        movie_parts.append({
-                            "file": part.file,
-                            "size": part.size or os.path.getsize(part.file),
-                            "resolution": str(media.videoResolution or ""),
-                            "codec": str(media.videoCodec or ""),
-                        })
+            movie_parts = _collect_movie_parts(plex_movie)
 
             if len(movie_parts) <= 1:
                 continue

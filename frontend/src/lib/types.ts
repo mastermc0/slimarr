@@ -232,3 +232,45 @@ export interface SearchTestResponse {
   rejected_results: Array<Record<string, unknown>>
   filtering_stages: Array<Record<string, unknown>>
 }
+
+export interface DuplicateCleanupSample {
+  title: string
+  best_file: string
+  duplicate_count: number
+  estimated_reclaimable_bytes: number
+  confidence: 'high' | 'medium' | 'low' | string
+}
+
+export interface DuplicateCleanupPreview {
+  status: string
+  reason?: string
+  movies_scanned: number
+  duplicates_found: number
+  estimated_reclaimable_bytes: number
+  confidence: Record<string, number>
+  sample: DuplicateCleanupSample[]
+  truncated?: boolean
+}
+
+export interface MaintenanceInsightSignal {
+  key: string
+  state: string
+  impact: number
+  detail: string
+}
+
+export interface MaintenanceInsightRecommendation {
+  priority: 'high' | 'medium' | 'low' | string
+  category: string
+  title: string
+  detail: string
+}
+
+export interface UtilitiesMaintenanceInsights {
+  generated_at: string
+  maintenance_score: number
+  maintenance_state: 'excellent' | 'good' | 'attention' | 'critical' | string
+  signals: MaintenanceInsightSignal[]
+  recommendations: MaintenanceInsightRecommendation[]
+  telemetry: Record<string, unknown>
+}
