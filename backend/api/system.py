@@ -621,6 +621,8 @@ async def search_test_harness(payload: SearchTestRequest, user=Depends(get_curre
             **result,
             "resolution": parsed.resolution,
             "video_codec": parsed.video_codec,
+            "audio_codec": parsed.audio_codec,
+            "audio_channels": parsed.audio_channels,
             "source": parsed.source,
             "hdr": parsed.hdr,
             "languages": parsed.languages,

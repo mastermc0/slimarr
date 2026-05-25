@@ -1,5 +1,5 @@
 ﻿# build-installer.ps1 - Build the Slimarr Windows installer
-# Output: dist/installer/SlimarrSetup-1.5.0.0.exe
+# Output: dist/installer/SlimarrSetup-1.6.0.0.exe
 #
 # Prerequisites (install once):
 #   pip install pyinstaller          (in your venv)
@@ -95,7 +95,7 @@ if not exist "Slimarr.exe" (
 )
 
 set "SLIMARR_NO_AUTO_BROWSER=1"
-start "Slimarr" /min "Slimarr.exe"
+start "Slimarr" /min "Slimarr.exe" --tray
 
 echo Waiting for Slimarr to start (up to 60 seconds)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -115,7 +115,7 @@ exit /b 0
 
 Write-Host ""
 Write-Host "  +-------------------------------------+" -ForegroundColor Green
-Write-Host "  |   Slimarr Installer Builder v1.5   |" -ForegroundColor Green
+Write-Host "  |   Slimarr Installer Builder v1.6   |" -ForegroundColor Green
 Write-Host "  +-------------------------------------+" -ForegroundColor Green
 
 # ---- 0. Sanity checks -------------------------------------------------------
@@ -269,9 +269,14 @@ Test-FrontendManifest
 if (-not $SkipPyInstaller) {
     Write-Step "4" "Running PyInstaller (this takes 2-5 minutes)"
     if (Test-Path "$Root\dist\Slimarr") { Remove-Item "$Root\dist\Slimarr" -Recurse -Force }
-    $saveEAP = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-    & $PyInstaller "$Root\slimarr.spec" --distpath "$Root\dist" --workpath "$Root\build\pyinstaller" --noconfirm 2>&1 | Out-Host
-    $ErrorActionPreference = $saveEAP
+    $pyArgs = @(
+        "$Root\slimarr.spec",
+        "--distpath", "$Root\dist",
+        "--workpath", "$Root\build\pyinstaller",
+        "--noconfirm"
+    )
+    $pyProc = Start-Process -FilePath $PyInstaller -ArgumentList $pyArgs -NoNewWindow -Wait -PassThru
+    if ($pyProc.ExitCode -ne 0) { Write-Err "PyInstaller failed with exit code $($pyProc.ExitCode)" }
     # PyInstaller may exit non-zero due to warnings even on a successful build; verify output instead.
     if (-not (Test-Path "$Root\dist\Slimarr\Slimarr.exe")) { Write-Err "PyInstaller failed - Slimarr.exe not produced" }
     Write-Ok "dist/Slimarr/ created"
@@ -287,8 +292,8 @@ Test-BundleManifest
 # ---- 5. Inno Setup ----------------------------------------------------------
 Write-Step "5" "Building installer with Inno Setup"
 New-Item -ItemType Directory -Path "$Root\dist\installer" -Force | Out-Null
-& $ISCC "$Root\installer\slimarr.iss"
-if ($LASTEXITCODE -ne 0) { Write-Err "Inno Setup failed" }
+$isccProc = Start-Process -FilePath $ISCC -ArgumentList @("$Root\installer\slimarr.iss") -NoNewWindow -Wait -PassThru
+if ($isccProc.ExitCode -ne 0) { Write-Err "Inno Setup failed with exit code $($isccProc.ExitCode)" }
 
 $installer = Get-ChildItem "$Root\dist\installer\SlimarrSetup*.exe" |
     Sort-Object LastWriteTime -Descending |

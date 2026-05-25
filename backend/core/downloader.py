@@ -13,6 +13,7 @@ from backend.config import get_config
 from backend.database import Download, Movie, SearchResult, UploaderStats, async_session
 from backend.integrations.download_client import decode_job_id, encode_job_id, get_active_download_client_name, get_download_client
 from backend.core.parser import parse_release_title
+from backend.core.search_diagnostics import redact_text
 from backend.realtime.events import emit_event
 
 TRANSIENT_HISTORY_STATUSES = {
@@ -135,7 +136,7 @@ async def start_download(search_result_id: int) -> Download:
         try:
             external_job_id = await client.submit_url(sr.nzb_url, sr.release_title)
         except Exception as exc:
-            _mark_download_failed(dl, f"{client_name} submit failed: {exc}")
+            _mark_download_failed(dl, f"{client_name} submit failed: {redact_text(str(exc))}")
             movie.status = "failed"
             movie.error_message = dl.error_message
             await db.commit()
@@ -206,7 +207,12 @@ async def monitor_download(download_id: int, poll_interval: int = 5) -> str:
             try:
                 status = await client.get_job_status(external_job_id)
             except Exception as e:
-                logger.warning(f"{client_name} poll error for download {download_id}: {e}")
+                logger.warning(
+                    "{} poll error for download {}: {}",
+                    client_name,
+                    download_id,
+                    redact_text(str(e)),
+                )
                 continue
 
             if status is None:

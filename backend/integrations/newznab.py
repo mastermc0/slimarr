@@ -125,6 +125,7 @@ class NewznabClient:
                 "raw_response": preview if include_raw else "",
                 "error": error,
                 "exception": exc,
+                "rate_limited": rate_limited,
             }
 
         results = []
@@ -157,6 +158,7 @@ class NewznabClient:
                 "raw_response": raw_preview(resp.content) if include_raw else "",
                 "error": str(parser_exc),
                 "exception": parser_exc,
+                "rate_limited": False,
             }
 
         error_el = _find_first_by_local_name(root, "error")
@@ -203,6 +205,7 @@ class NewznabClient:
                 "raw_response": raw_preview(resp.content) if include_raw else "",
                 "error": str(exc),
                 "exception": exc,
+                "rate_limited": rate_limited,
             }
 
         for item in _iter_by_local_name(root, "item"):
@@ -273,6 +276,7 @@ class NewznabClient:
             "raw_response": raw_preview(resp.content) if include_raw else "",
             "error": None,
             "exception": None,
+            "rate_limited": False,
         }
 
     async def test_connection(self) -> dict:

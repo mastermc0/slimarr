@@ -116,6 +116,116 @@ def _override_string_list(overrides: dict[str, Any], key: str) -> list[str]:
     return [str(item).lower().strip() for item in value if str(item).strip()]
 
 
+_PRIORITY_ALIASES = {
+    "4k": "resolution_2160p",
+    "2160p": "resolution_2160p",
+    "uhd": "resolution_2160p",
+    "hdr": "hdr",
+    "hdr10": "hdr",
+    "hdr10+": "hdr",
+    "dolbyvision": "dolby_vision",
+    "dolby_vision": "dolby_vision",
+    "dovi": "dolby_vision",
+    "dv": "dolby_vision",
+    "atmos": "atmos",
+    "dolby_atmos": "atmos",
+    "truehd": "truehd",
+    "dolby_truehd": "truehd",
+    "5.1": "surround_5_1",
+    "5_1": "surround_5_1",
+    "surround_5_1": "surround_5_1",
+    "7.1": "surround_7_1",
+    "7_1": "surround_7_1",
+    "surround_7_1": "surround_7_1",
+}
+
+
+def _canonical_priority_key(value: str) -> str:
+    key = re.sub(r"[\s\-]+", "_", value.lower().strip())
+    key = key.replace("+", "plus")
+    return _PRIORITY_ALIASES.get(key, key)
+
+
+def _quality_priority_weights(overrides: dict[str, Any]) -> dict[str, float]:
+    raw = overrides.get("quality_priorities") or overrides.get("priorities") or {}
+    items: list[tuple[str, Any]]
+    if isinstance(raw, dict):
+        items = [(str(k), v) for k, v in raw.items()]
+    elif isinstance(raw, list):
+        items = [(str(k), 5.0) for k in raw]
+    else:
+        return {}
+
+    weights: dict[str, float] = {}
+    for key, value in items:
+        canonical = _canonical_priority_key(key)
+        try:
+            weight = 5.0 if value is True else 0.0 if value is False else float(value)
+        except (TypeError, ValueError):
+            continue
+        weights[canonical] = max(0.0, min(10.0, weight))
+    return {key: value for key, value in weights.items() if value > 0}
+
+
+def _priority_weight(weights: dict[str, float], *keys: str) -> float:
+    return max((weights.get(key, 0.0) for key in keys), default=0.0)
+
+
+def _audio_channel_value(channels: str | None) -> float:
+    if not channels:
+        return 0.0
+    try:
+        return float(str(channels).replace("_", "."))
+    except ValueError:
+        return 0.0
+
+
+def _quality_priority_bonus(parsed, cand_res_rank: int, weights: dict[str, float]) -> tuple[float, list[str]]:
+    if not weights:
+        return 0.0, []
+
+    bonus = 0.0
+    matched: list[str] = []
+
+    resolution_weight = _priority_weight(weights, "resolution_2160p")
+    if resolution_weight and cand_res_rank >= 4:
+        bonus += resolution_weight * 4.0
+        matched.append("4k")
+
+    hdr_weight = _priority_weight(weights, "hdr")
+    if hdr_weight and parsed.hdr and parsed.hdr != "sdr":
+        bonus += hdr_weight * 2.5
+        matched.append(parsed.hdr)
+
+    dv_weight = _priority_weight(weights, "dolby_vision")
+    if dv_weight and parsed.has_dolby_vision:
+        bonus += dv_weight * 3.0
+        matched.append("dolby_vision")
+
+    atmos_weight = _priority_weight(weights, "atmos")
+    if atmos_weight and parsed.audio_codec == "atmos":
+        bonus += atmos_weight * 3.5
+        matched.append("atmos")
+
+    truehd_weight = _priority_weight(weights, "truehd")
+    if truehd_weight and parsed.audio_codec in {"truehd", "atmos"}:
+        bonus += truehd_weight * 2.5
+        matched.append("truehd")
+
+    channel_value = _audio_channel_value(parsed.audio_channels)
+    surround_5_1_weight = _priority_weight(weights, "surround_5_1")
+    if surround_5_1_weight and channel_value >= 5.1:
+        bonus += surround_5_1_weight * 2.0
+        matched.append("5.1+")
+
+    surround_7_1_weight = _priority_weight(weights, "surround_7_1")
+    if surround_7_1_weight and channel_value >= 7.1:
+        bonus += surround_7_1_weight * 2.5
+        matched.append("7.1")
+
+    return bonus, matched
+
+
 def _has_explicit_language_marker(candidate_title: str, language: str) -> bool:
     checks = {
         "english": r"\b(eng|english|dual[- ._]?audio[ ._]?eng?)\b",
@@ -163,6 +273,7 @@ def compare_release(
 
     intent = (quality_intent or "space_saver").strip().lower()
     overrides = quality_profile_overrides or {}
+    quality_priorities = _quality_priority_weights(overrides)
 
     def _reject(reason: str) -> ComparisonResult:
         savings = local_size - candidate_size
@@ -206,8 +317,10 @@ def compare_release(
 
     source_rank_local = get_source_rank(local_source_type or "")
     source_rank_candidate = get_source_rank(parsed.source)
+    priority_bonus, priority_matches = _quality_priority_bonus(parsed, cand_res_rank, quality_priorities)
 
     intent_allows_larger = False
+    priority_allows_larger = False
     if candidate_size >= local_size:
         if intent == "balanced" and allow_larger_replacements:
             intent_allows_larger = (
@@ -228,13 +341,29 @@ def compare_release(
                 and cand_res_rank >= local_res_rank
                 and source_rank_candidate >= source_rank_local
             )
+        if allow_larger_replacements and priority_bonus > 0:
+            default_max_increase = 80.0 if intent in {"premium", "reference"} else 25.0
+            priority_allows_larger = (
+                size_increase_pct <= _override_float(overrides, "max_size_increase_pct", default_max_increase)
+                and cand_res_rank >= local_res_rank
+                and source_rank_candidate >= max(45, source_rank_local - 10)
+            )
 
-    if candidate_size >= local_size and not quality_upgrade_allows_larger and not intent_allows_larger:
+    if (
+        candidate_size >= local_size
+        and not quality_upgrade_allows_larger
+        and not intent_allows_larger
+        and not priority_allows_larger
+    ):
         diff_mb = (candidate_size - local_size) / 1_048_576
         return _reject(f"Candidate is not smaller (+{diff_mb:.0f} MB vs local)")
 
     if parsed.has_dolby_vision and config.comparison.avoid_dolby_vision:
-        if not (parsed.has_hdr_fallback and config.comparison.allow_dolby_vision_with_hdr_fallback):
+        dolby_vision_preferred = _priority_weight(quality_priorities, "dolby_vision") > 0
+        if not (
+            dolby_vision_preferred
+            or (parsed.has_hdr_fallback and config.comparison.allow_dolby_vision_with_hdr_fallback)
+        ):
             return _reject("Dolby Vision release blocked by compatibility safety mode")
 
     if parsed.has_hardcoded_subs and config.comparison.reject_hardcoded_subs:
@@ -294,7 +423,12 @@ def compare_release(
     elif intent in {"premium", "reference"}:
         min_savings_required = 0.0
 
-    if savings_pct < min_savings_required and not quality_upgrade_allows_larger and not intent_allows_larger:
+    if (
+        savings_pct < min_savings_required
+        and not quality_upgrade_allows_larger
+        and not intent_allows_larger
+        and not priority_allows_larger
+    ):
         return _reject(f"Savings {savings_pct:.1f}% < minimum {min_savings_required:.1f}%")
 
     if cand_res_rank < local_res_rank:
@@ -315,6 +449,8 @@ def compare_release(
         score = 12.0 + min(35.0, (candidate_health.score - local_health.score) * 0.8)
     elif intent_allows_larger:
         score = 18.0 + min(40.0, (candidate_health.score - local_health.score) * 1.0)
+    elif priority_allows_larger:
+        score = 16.0 + min(45.0, priority_bonus)
 
     if cand_res_rank >= 4 and cand_res_rank > local_res_rank:
         score += 50.0
@@ -354,6 +490,9 @@ def compare_release(
     preferred_sources = _override_string_list(overrides, "preferred_sources")
     if preferred_sources and (parsed.source or "").lower() in preferred_sources:
         score += 14.0
+
+    if priority_bonus:
+        score += priority_bonus
 
     resolution_floor = str(overrides.get("resolution_floor") or "").strip().lower()
     if resolution_floor and get_resolution_rank(cand_res) < get_resolution_rank(resolution_floor):
@@ -421,6 +560,7 @@ def compare_release(
         "match_certainty": round(match_score, 2),
         "indexer_reliability": round(reliability_score, 2),
         "media_health": round(candidate_health.score, 2),
+        "quality_priorities": round(min(100.0, priority_bonus * 2.0), 2),
     }
     confidence_score = round(
         size_score * 0.20
@@ -455,6 +595,8 @@ def compare_release(
         notes.append(f"NZB age: {age_days} days")
     if parsed.uploader or parsed.group:
         notes.append(f"Uploader score: {uploader_health:.2f}")
+    if priority_matches:
+        notes.append(f"Matched priorities: {', '.join(dict.fromkeys(priority_matches))}")
     notes.append(f"Confidence: {confidence_score:.0f}")
 
     return ComparisonResult(

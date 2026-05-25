@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from backend.core.parser import normalize_codec, normalize_resolution
 from backend.core.media_probe import probe_media_file
+from backend.core.search_diagnostics import redact_text
 from backend.database import ActivityLog, Movie, async_session
 from backend.realtime.events import emit_event
 
@@ -62,7 +63,7 @@ async def _run_scan() -> int:
     try:
         plex_movies = plex.get_all_movies()
     except Exception as e:
-        logger.error(f"Plex connection failed during scan: {e}")
+        logger.error("Plex connection failed during scan: {}", redact_text(str(e)))
         return 0
 
     total = len(plex_movies)
@@ -110,7 +111,11 @@ async def _run_scan() -> int:
                             if genres and isinstance(genres[0], dict):
                                 genres_json = json.dumps([g["name"] for g in genres])
                     except Exception as te:
-                        logger.warning(f"TMDB lookup failed for {pm['title']}: {te}")
+                        logger.warning(
+                            "TMDB lookup failed for {}: {}",
+                            pm["title"],
+                            redact_text(str(te)),
+                        )
 
                 if not poster_path and config.radarr.enabled and (pm.get("imdb_id") or existing_imdb):
                     try:
@@ -120,10 +125,18 @@ async def _run_scan() -> int:
                             poster_path = imgs.get("poster_url")
                             backdrop_path = backdrop_path or imgs.get("fanart_url")
                     except Exception as re:
-                        logger.warning(f"Radarr image fallback failed for {pm['title']}: {re}")
+                        logger.warning(
+                            "Radarr image fallback failed for {}: {}",
+                            pm["title"],
+                            redact_text(str(re)),
+                        )
 
         except Exception as e:
-            logger.warning(f"Enrichment fetch failed for {pm.get('title', '?')}: {e}")
+            logger.warning(
+                "Enrichment fetch failed for {}: {}",
+                pm.get("title", "?"),
+                redact_text(str(e)),
+            )
 
         # Short-lived DB write per movie
         try:
@@ -185,7 +198,7 @@ async def _run_scan() -> int:
                 })
 
         except Exception as e:
-            logger.error(f"Error saving {pm.get('title', '?')}: {e}")
+            logger.error("Error saving {}: {}", pm.get("title", "?"), redact_text(str(e)))
 
     await emit_event("scan:completed", {"total_movies": total})
     logger.info(f"Scan completed: {total} movies processed")

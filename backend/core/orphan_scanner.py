@@ -7,6 +7,7 @@ from typing import Optional
 from sqlalchemy import select
 from backend.database import async_session, Download, OrphanedDownload
 from backend.config import get_config
+from backend.core.search_diagnostics import redact_text
 from backend.integrations.download_client import encode_job_id, get_download_client
 from loguru import logger
 
@@ -28,7 +29,7 @@ async def scan_orphaned_downloads() -> int:
         else:
             logger.warning(f"Unknown downloader: {downloader}")
     except Exception as e:
-        logger.error(f"Error scanning orphans: {e}")
+        logger.error("Error scanning orphans: {}", redact_text(str(e)))
     
     return new_orphans
 
@@ -96,12 +97,16 @@ async def _scan_sabnzbd_orphans() -> int:
                 session.add(orphan)
                 new_orphans += 1
                 
-                logger.info(f"Found orphaned download: {job.get('name')} ({age_hours}h old)")
+                logger.info(
+                    "Found orphaned download: {} ({}h old)",
+                    redact_text(str(job.get("name") or "")),
+                    age_hours,
+                )
             
             await session.commit()
     
     except Exception as e:
-        logger.error(f"Error scanning SABnzbd orphans: {e}")
+        logger.error("Error scanning SABnzbd orphans: {}", redact_text(str(e)))
     
     return new_orphans
 
@@ -169,12 +174,16 @@ async def _scan_nzbget_orphans() -> int:
                 session.add(orphan)
                 new_orphans += 1
                 
-                logger.info(f"Found orphaned NZBGet job: {job.get('Name')} ({age_hours}h old)")
+                logger.info(
+                    "Found orphaned NZBGet job: {} ({}h old)",
+                    redact_text(str(job.get("Name") or "")),
+                    age_hours,
+                )
             
             await session.commit()
     
     except Exception as e:
-        logger.error(f"Error scanning NZBGet orphans: {e}")
+        logger.error("Error scanning NZBGet orphans: {}", redact_text(str(e)))
     
     return new_orphans
 
@@ -206,7 +215,12 @@ async def cleanup_orphaned_download(orphan_id: int) -> tuple[bool, Optional[str]
                 client = get_download_client(downloader_name)
                 downloader_purged = await client.purge_job(job_id)
             except Exception as e:
-                logger.warning(f"Failed to purge orphan job {job_id} from {downloader_name}: {e}")
+                logger.warning(
+                    "Failed to purge orphan job {} from {}: {}",
+                    job_id,
+                    downloader_name,
+                    redact_text(str(e)),
+                )
 
         if storage_path:
             try:
@@ -217,7 +231,11 @@ async def cleanup_orphaned_download(orphan_id: int) -> tuple[bool, Optional[str]
                     os.remove(storage_path)
                     folder_deleted = True
             except Exception as e:
-                logger.warning(f"Failed to delete orphan path '{storage_path}': {e}")
+                logger.warning(
+                    "Failed to delete orphan path '{}': {}",
+                    storage_path,
+                    redact_text(str(e)),
+                )
 
         if downloader_purged or folder_deleted or not storage_path:
             await session.delete(orphan)
@@ -259,7 +277,11 @@ async def auto_cleanup_old_orphans(days_old: int = 7) -> int:
                     elif os.path.isfile(orphan.storage_path):
                         os.remove(orphan.storage_path)
                 except Exception as e:
-                    logger.warning(f"Failed to delete orphan path '{orphan.storage_path}': {e}")
+                    logger.warning(
+                        "Failed to delete orphan path '{}': {}",
+                        orphan.storage_path,
+                        redact_text(str(e)),
+                    )
             await session.delete(orphan)
             deleted_count += 1
         

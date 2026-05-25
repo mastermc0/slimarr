@@ -165,7 +165,16 @@ async def run_full_cycle() -> dict:
             return {"status": "already_running"}
         _running = True
         _stop_requested = False
-    summary = {"scanned": 0, "processed": 0, "improved": 0, "failed": 0, "stopped_reason": ""}
+    summary = {
+        "scanned": 0,
+        "processed": 0,
+        "improved": 0,
+        "failed": 0,
+        "skipped": 0,
+        "no_candidates": 0,
+        "review_required": 0,
+        "stopped_reason": "",
+    }
 
     try:
         await emit_event("cycle:started", {"timestamp": datetime.now(timezone.utc).isoformat()})
@@ -218,8 +227,17 @@ async def run_full_cycle() -> dict:
             try:
                 result = await process_single_movie(movie.id)
                 summary["processed"] += 1
-                if result.get("status") == "replaced":
+                status = str(result.get("status") or "")
+                if status == "replaced":
                     summary["improved"] += 1
+                elif status == "no_candidates":
+                    summary["no_candidates"] += 1
+                elif status in {"protected", "skipped"}:
+                    summary["skipped"] += 1
+                elif status == "review_required":
+                    summary["review_required"] += 1
+                elif status in {"dry_run_candidate", "already_running"}:
+                    summary["skipped"] += 1
                 else:
                     summary["failed"] += 1
                 raise_if_degraded()

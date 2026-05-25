@@ -48,10 +48,12 @@ class NzbgetConfig(BaseModel):
 
 
 class IndexerConfig(BaseModel):
+    enabled: bool = True
     name: str = ""
     url: str = ""
     api_key: str = ""
     categories: list[int] = [2000]
+    rate_limit_cooldown_minutes: int = 720
 
 
 class ProwlarrConfig(BaseModel):

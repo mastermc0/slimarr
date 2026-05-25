@@ -31,6 +31,7 @@ export interface SearchResultItem {
   resolution?: string
   video_codec?: string
   audio_codec?: string | null
+  audio_channels?: string | null
   source?: string | null
   age_days?: number
   hdr?: string | null

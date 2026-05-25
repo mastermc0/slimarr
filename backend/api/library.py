@@ -312,6 +312,7 @@ def _sr_dict(s: SearchResult) -> dict:
         "resolution": s.resolution,
         "video_codec": s.video_codec,
         "audio_codec": s.audio_codec,
+        "audio_channels": s.audio_channels,
         "source": s.source,
         "age_days": s.age_days,
         "hdr": s.hdr,

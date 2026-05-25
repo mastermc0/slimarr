@@ -103,9 +103,9 @@ def normalize_exception(exc: BaseException, *, timeout_seconds: float | None = N
         return f"{cls_name}: {message}"
     if isinstance(exc, httpx.HTTPStatusError):
         response = exc.response
-        body = response.text[:500] if response is not None else ""
+        body = raw_preview(response.text[:500] if response is not None else "")
         return f"{cls_name}: HTTP {response.status_code if response else '?'} {body}".strip()
-    return f"{cls_name}: {message or repr(exc)}"
+    return redact_text(f"{cls_name}: {message or repr(exc)}")
 
 
 def is_rate_limit_signal(

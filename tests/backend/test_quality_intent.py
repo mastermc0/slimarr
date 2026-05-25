@@ -106,6 +106,60 @@ class QualityIntentCompareTests(unittest.TestCase):
 
         self.assertEqual(result.decision, "accept")
 
+    def test_quality_priorities_boost_matching_release_features(self) -> None:
+        with patch("backend.core.comparer.get_config", return_value=self._cfg()):
+            baseline = compare_release(
+                local_size=8_000_000_000,
+                local_resolution="1080p",
+                local_codec="h264",
+                candidate_size=6_000_000_000,
+                candidate_title="Movie.Title.2022.1080p.WEB-DL.x265-GRP",
+                movie_title="Movie Title",
+                movie_year=2022,
+                quality_intent="premium",
+            )
+            prioritized = compare_release(
+                local_size=8_000_000_000,
+                local_resolution="1080p",
+                local_codec="h264",
+                candidate_size=6_000_000_000,
+                candidate_title="Movie.Title.2022.2160p.HDR10.TrueHD.Atmos.5.1.WEB-DL.x265-GRP",
+                movie_title="Movie Title",
+                movie_year=2022,
+                quality_intent="premium",
+                quality_profile_overrides={
+                    "quality_priorities": {
+                        "4k": 8,
+                        "hdr": 6,
+                        "atmos": 7,
+                        "5.1": 5,
+                    }
+                },
+            )
+
+        self.assertEqual(prioritized.decision, "accept")
+        self.assertGreater(prioritized.score, baseline.score)
+        self.assertIn("Matched priorities", prioritized.notes)
+        self.assertGreater(prioritized.confidence_breakdown["quality_priorities"], 0)
+
+    def test_dolby_vision_priority_allows_explicit_dv_preference(self) -> None:
+        cfg = self._cfg()
+        cfg.comparison.avoid_dolby_vision = True
+        cfg.comparison.allow_dolby_vision_with_hdr_fallback = False
+        with patch("backend.core.comparer.get_config", return_value=cfg):
+            result = compare_release(
+                local_size=8_000_000_000,
+                local_resolution="1080p",
+                local_codec="h264",
+                candidate_size=6_000_000_000,
+                candidate_title="Movie.Title.2022.2160p.DV.WEB-DL.x265-GRP",
+                movie_title="Movie Title",
+                movie_year=2022,
+                quality_profile_overrides={"quality_priorities": {"dolby_vision": 8}},
+            )
+
+        self.assertEqual(result.decision, "accept")
+
 
 if __name__ == "__main__":
     unittest.main()

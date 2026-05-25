@@ -5,10 +5,12 @@ import TestConnectionButton from '@/components/TestConnectionButton'
 import { CheckCircle, Plus, Trash2, XCircle } from 'lucide-react'
 
 interface Indexer {
+  enabled?: boolean
   name: string
   url: string
   api_key: string
   categories: number[]
+  rate_limit_cooldown_minutes?: number
 }
 
 interface DownloadClientConfig {
@@ -399,7 +401,7 @@ export default function Settings() {
           <button
             onClick={() => {
               const indexers = ((settings?.indexers as Indexer[]) ?? []).slice()
-              indexers.push({ name: '', url: '', api_key: '', categories: [2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060] })
+              indexers.push({ enabled: true, name: '', url: '', api_key: '', categories: [2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060], rate_limit_cooldown_minutes: 720 })
               setSettings((prev) => ({ ...prev!, indexers }))
             }}
             className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-brand-green text-white text-xs hover:bg-green-600"
@@ -413,7 +415,18 @@ export default function Settings() {
         {((settings?.indexers as Indexer[]) ?? []).map((idx, i) => (
           <div key={i} className="bg-gray-800 rounded-lg p-4 space-y-3 relative">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-gray-300">Indexer {i + 1}{idx.name ? ` — ${idx.name}` : ''}</span>
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={idx.enabled !== false}
+                  onChange={(e) => {
+                    const indexers = ((settings?.indexers as Indexer[]) ?? []).slice()
+                    indexers[i] = { ...indexers[i], enabled: e.target.checked }
+                    setSettings((prev) => ({ ...prev!, indexers }))
+                  }}
+                />
+                <span>Indexer {i + 1}{idx.name ? ` - ${idx.name}` : ''}</span>
+              </label>
               <div className="flex items-center gap-2">
                 <TestConnectionButton
                   service={`indexer-${i}`}
@@ -460,6 +473,21 @@ export default function Settings() {
                   placeholder="https://api.nzbgeek.info"
                 />
               </div>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Rate-limit cooldown (minutes)</label>
+              <input
+                type="number"
+                min="5"
+                step="5"
+                value={idx.rate_limit_cooldown_minutes ?? 720}
+                onChange={(e) => {
+                  const indexers = ((settings?.indexers as Indexer[]) ?? []).slice()
+                  indexers[i] = { ...indexers[i], rate_limit_cooldown_minutes: Number(e.target.value) || 720 }
+                  setSettings((prev) => ({ ...prev!, indexers }))
+                }}
+                className="w-full bg-gray-700 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-green"
+              />
             </div>
             <div>
               <label className="block text-xs text-gray-400 mb-1">API Key</label>

@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/react-18-61DAFB?logo=react&logoColor=black" />
   <img src="https://img.shields.io/badge/license-MIT-green" />
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20Docker%20%7C%20Windows-0ea5e9" />
-  <img src="https://img.shields.io/badge/release-1.5.0.0-success" />
+  <img src="https://img.shields.io/badge/release-1.6.0.0-success" />
 </p>
 
 <p align="center">
@@ -36,7 +36,17 @@ Scan Plex library -> Search Usenet indexers -> Compare releases
 
 Slimarr is designed to look and feel like a native member of the **\*arr ecosystem** (Radarr, Sonarr, Prowlarr). If you're familiar with those tools, you'll feel right at home.
 
-Current release: **1.5.0.0** (2026-05-15).
+Current release: **1.6.0.0** (2026-05-25).
+
+### What's New in 1.6.0.0 - Preference Engine
+
+- Per-movie quality priority sliders for 4K, HDR, Dolby Vision, Atmos, TrueHD, 5.1+, and 7.1 ranking
+- Candidate scoring now uses those priorities as weighted ranking boosts while keeping safety checks visible
+- Search results now show audio codec/channel badges and include priority contribution in candidate details
+- Direct Newznab indexers now pause automatically after quota/rate-limit responses instead of being queried repeatedly
+- Sensitive API keys are redacted from normal runtime logs as well as diagnostics history
+- Automation summaries now separate no-candidate/protected/review outcomes from real failures
+- Windows startup and installer launch paths now start Slimarr with the tray icon
 
 ### What's New in 1.5.0.0 - Foundation
 
@@ -189,11 +199,11 @@ docker compose -f docker-compose.postgres.yml up -d
 
 ### Option B - Windows installer
 
-Download `SlimarrSetup-1.5.0.0.exe` (or the latest `SlimarrSetup-*.exe`) from the [Releases](https://github.com/theantipopau/slimarr/releases) page and run it. The installer bundles Python and all dependencies - no manual setup required. After install, Slimarr appears in the Start Menu and optionally the system tray on login.
+Download `SlimarrSetup-1.6.0.0.exe` (or the latest `SlimarrSetup-*.exe`) from the [Releases](https://github.com/theantipopau/slimarr/releases) page and run it. The installer bundles Python and all dependencies - no manual setup required. After install, Slimarr appears in the Start Menu and optionally the system tray on login.
 
 At the end of setup, the installer shows `Start Slimarr now` (checked by default). If selected, Slimarr starts minimized with the tray icon available and your browser opens automatically to `http://localhost:9494` when the backend is ready.
 
-`1.5.0.0` is the current release target. Newer `main` branch changes may land before the next installer is cut; if you want those immediately, run Slimarr from source or Docker.
+`1.6.0.0` is the current release target. Newer `main` branch changes may land before the next installer is cut; if you want those immediately, run Slimarr from source or Docker.
 
 ### Option C - From source
 

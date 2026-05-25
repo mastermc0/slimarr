@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 
 interface Props {
-  type: 'res' | 'codec' | 'status' | 'hdr' | 'health' | 'language'
+  type: 'res' | 'codec' | 'status' | 'hdr' | 'health' | 'language' | 'audio'
   value: string
 }
 
@@ -36,6 +36,17 @@ const healthColors: Record<string, string> = {
   reject: 'bg-red-700 text-red-100',
 }
 
+const audioColors: Record<string, string> = {
+  atmos: 'bg-fuchsia-700 text-fuchsia-100',
+  truehd: 'bg-indigo-700 text-indigo-100',
+  'dts-hd ma': 'bg-cyan-700 text-cyan-100',
+  'dts-hd': 'bg-cyan-700 text-cyan-100',
+  dts: 'bg-cyan-800 text-cyan-100',
+  'dd5.1': 'bg-teal-700 text-teal-100',
+  '5.1': 'bg-teal-700 text-teal-100',
+  '7.1': 'bg-fuchsia-700 text-fuchsia-100',
+}
+
 export default function QualityBadge({ type, value }: Props) {
   const lv = value.toLowerCase()
   let cls = 'bg-gray-700 text-gray-200'
@@ -45,6 +56,7 @@ export default function QualityBadge({ type, value }: Props) {
   if (type === 'hdr') cls = hdrColors[lv] ?? cls
   if (type === 'health') cls = healthColors[lv] ?? cls
   if (type === 'language') cls = lv === 'english' ? 'bg-green-800 text-green-100' : 'bg-gray-700 text-gray-200'
+  if (type === 'audio') cls = audioColors[lv] ?? 'bg-slate-700 text-slate-100'
 
   return (
     <span className={clsx('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase', cls)}>

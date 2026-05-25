@@ -6,6 +6,16 @@ import type { Movie, SearchResultItem } from '@/lib/types'
 import QualityBadge from '@/components/QualityBadge'
 import { ArrowLeft, Search, Zap, Download, Info, X, Lock, Unlock, Star, SlidersHorizontal, Save } from 'lucide-react'
 
+const qualityPriorityOptions = [
+  { key: '4k', label: '4K' },
+  { key: 'hdr', label: 'HDR' },
+  { key: 'dolby_vision', label: 'Dolby Vision' },
+  { key: 'atmos', label: 'Atmos' },
+  { key: 'truehd', label: 'TrueHD' },
+  { key: '5.1', label: '5.1+' },
+  { key: '7.1', label: '7.1' },
+]
+
 function fmt(bytes?: number | null) {
   if (!bytes) return '-'
   return (bytes / 1e9).toFixed(2) + ' GB'
@@ -63,6 +73,7 @@ export default function MovieDetail() {
   const [maxSizeIncreasePct, setMaxSizeIncreasePct] = useState('')
   const [preferredSources, setPreferredSources] = useState('')
   const [rejectReleaseGroups, setRejectReleaseGroups] = useState('')
+  const [qualityPriorities, setQualityPriorities] = useState<Record<string, string>>({})
 
   const loadMovie = async () => {
     try {
@@ -81,6 +92,19 @@ export default function MovieDetail() {
       )
       setPreferredSources(listToInput(overrides.preferred_sources))
       setRejectReleaseGroups(listToInput(overrides.reject_release_groups))
+      const loadedPriorities = typeof overrides.quality_priorities === 'object' && overrides.quality_priorities
+        ? (overrides.quality_priorities as Record<string, unknown>)
+        : {}
+      setQualityPriorities(
+        Object.fromEntries(
+          qualityPriorityOptions.map((option) => [
+            option.key,
+            loadedPriorities[option.key] === undefined || loadedPriorities[option.key] === null
+              ? '0'
+              : String(loadedPriorities[option.key]),
+          ]),
+        ),
+      )
     } catch {
       // keep existing state and let page continue rendering
     }
@@ -211,6 +235,13 @@ export default function MovieDetail() {
       if (preferredCodec.trim()) parsedOverrides.preferred_codec = preferredCodec.trim()
       if (resolutionFloor.trim()) parsedOverrides.resolution_floor = resolutionFloor.trim()
       if (parsedMaxSize !== undefined) parsedOverrides.max_size_increase_pct = parsedMaxSize
+      const priorityValues = Object.fromEntries(
+        qualityPriorityOptions
+          .map((option) => [option.key, Number(qualityPriorities[option.key] || 0)] as const)
+          .filter(([, value]) => Number.isFinite(value) && value > 0)
+          .map(([key, value]) => [key, Math.max(0, Math.min(10, value))]),
+      )
+      if (Object.keys(priorityValues).length > 0) parsedOverrides.quality_priorities = priorityValues
 
       await api.updateMovieQualityIntent(movieId, {
         quality_intent: qualityIntent ?? 'space_saver',
@@ -440,6 +471,39 @@ export default function MovieDetail() {
               </label>
             </div>
 
+            <div className="mt-4 border-t border-gray-800 pt-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <p className="text-xs uppercase text-gray-500">Priorities</p>
+                <button
+                  type="button"
+                  onClick={() => setQualityPriorities(Object.fromEntries(qualityPriorityOptions.map((option) => [option.key, '0'])))}
+                  className="rounded bg-gray-800 px-2 py-1 text-xs text-gray-300 hover:bg-gray-700"
+                >
+                  Clear
+                </button>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                {qualityPriorityOptions.map((option) => {
+                  const value = Number(qualityPriorities[option.key] || 0)
+                  return (
+                    <label key={option.key} className="grid grid-cols-[5.5rem_minmax(0,1fr)_2rem] items-center gap-3 text-sm text-gray-300">
+                      <span>{option.label}</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="10"
+                        step="1"
+                        value={Number.isFinite(value) ? value : 0}
+                        onChange={(e) => setQualityPriorities((current) => ({ ...current, [option.key]: e.target.value }))}
+                        className="w-full accent-green-500"
+                      />
+                      <span className="text-right text-xs text-gray-500">{Number.isFinite(value) ? value : 0}</span>
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+
             <div className="mt-3 flex flex-wrap items-center gap-3">
               <button
                 onClick={doSaveQualityIntent}
@@ -475,6 +539,8 @@ export default function MovieDetail() {
                     <span>{r.resolution || 'Unknown res'}</span>
                     {r.source && <span>{r.source}</span>}
                     {r.hdr && <span>{r.hdr}</span>}
+                    {r.audio_codec && <span>{r.audio_codec}</span>}
+                    {r.audio_channels && <span>{r.audio_channels}</span>}
                     {r.media_health_rating && <span>{r.media_health_rating}</span>}
                     <span>{fmtAge(r.age_days)}</span>
                     <span>{fmt(r.size)}</span>
@@ -487,6 +553,8 @@ export default function MovieDetail() {
                   {r.resolution ? <QualityBadge type="res" value={r.resolution} /> : '-'}
                   {r.source && <QualityBadge type="status" value={r.source} />}
                   {r.hdr && <QualityBadge type="hdr" value={r.hdr} />}
+                  {r.audio_codec && <QualityBadge type="audio" value={r.audio_codec} />}
+                  {r.audio_channels && <QualityBadge type="audio" value={r.audio_channels} />}
                   {r.media_health_rating && <QualityBadge type="health" value={r.media_health_rating} />}
                 </div>
                 <div className="hidden md:block text-gray-400">{fmtAge(r.age_days)}</div>
@@ -578,6 +646,8 @@ export default function MovieDetail() {
                 <p className="text-sm">{selectedResult.resolution || 'Unknown resolution'} / {selectedResult.video_codec || 'Unknown codec'} / {selectedResult.source || 'Unknown source'} / {fmtAge(selectedResult.age_days)}</p>
                 <div className="mt-2 flex flex-wrap gap-1">
                   {selectedResult.hdr && <QualityBadge type="hdr" value={selectedResult.hdr} />}
+                  {selectedResult.audio_codec && <QualityBadge type="audio" value={selectedResult.audio_codec} />}
+                  {selectedResult.audio_channels && <QualityBadge type="audio" value={selectedResult.audio_channels} />}
                   {(selectedResult.languages ?? []).map((lang) => (
                     <QualityBadge key={lang} type="language" value={lang} />
                   ))}

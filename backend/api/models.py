@@ -97,6 +97,7 @@ class SearchResultOut(BaseModel):
     resolution: str | None = None
     video_codec: str | None = None
     audio_codec: str | None = None
+    audio_channels: str | None = None
     source: str | None = None
     age_days: int | None = None
     hdr: str | None = None

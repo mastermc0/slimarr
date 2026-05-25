@@ -156,6 +156,7 @@ class SearchResult(Base):
     resolution: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     video_codec: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     audio_codec: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    audio_channels: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     age_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     savings_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -400,6 +401,7 @@ async def _run_lightweight_migrations(conn) -> None:
 
     search_result_columns = await _table_columns(conn, "search_results")
     await _add_column_if_missing(conn, "search_results", search_result_columns, "age_days", "INTEGER")
+    await _add_column_if_missing(conn, "search_results", search_result_columns, "audio_channels", "VARCHAR")
     await _add_column_if_missing(conn, "search_results", search_result_columns, "confidence_score", "FLOAT")
     await _add_column_if_missing(conn, "search_results", search_result_columns, "confidence_breakdown", "TEXT")
     await _add_column_if_missing(conn, "search_results", search_result_columns, "hdr", "VARCHAR")

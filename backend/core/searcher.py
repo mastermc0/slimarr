@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 from loguru import logger
@@ -14,6 +14,7 @@ from sqlalchemy import select
 from backend.core.comparer import compare_release
 from backend.core.search_diagnostics import (
     emit_search_warning,
+    is_rate_limit_signal,
     normalize_exception,
     record_filter_summary,
     record_movie_search_completed,
@@ -23,6 +24,30 @@ from backend.database import DecisionAuditLog, Movie, SearchResult, async_sessio
 from backend.realtime.events import emit_event
 
 _category_warnings_seen: set[tuple[str, tuple[int, ...]]] = set()
+_indexer_rate_limited_until: dict[str, datetime] = {}
+
+
+def _is_indexer_available(idx_cfg) -> tuple[bool, datetime | None]:
+    disabled = getattr(idx_cfg, "enabled", True) is False
+    if disabled:
+        return False, None
+
+    until = _indexer_rate_limited_until.get(idx_cfg.name or "")
+    if until and until > datetime.now(timezone.utc):
+        return False, until
+    return True, None
+
+
+def _mark_indexer_rate_limited(idx_cfg, detail: dict) -> datetime:
+    cooldown_minutes = int(getattr(idx_cfg, "rate_limit_cooldown_minutes", 720) or 720)
+    until = datetime.now(timezone.utc) + timedelta(minutes=max(5, cooldown_minutes))
+    _indexer_rate_limited_until[idx_cfg.name or "unknown"] = until
+    logger.warning(
+        "Indexer {} is rate limited; pausing direct searches until {}",
+        idx_cfg.name,
+        until.isoformat(),
+    )
+    return until
 
 
 def _nzb_age_days(raw_pub_date: str | None) -> int | None:
@@ -85,7 +110,7 @@ async def search_for_movie(movie_id: int) -> list[dict]:
         indexer_attempts = 0
         indexer_failures = 0
         configured_sources = int(bool(config.prowlarr.enabled and config.prowlarr.url)) + len(
-            [idx for idx in config.indexers if idx.name and idx.url]
+            [idx for idx in config.indexers if getattr(idx, "enabled", True) and idx.name and idx.url]
         )
 
         if configured_sources == 0:
@@ -99,7 +124,7 @@ async def search_for_movie(movie_id: int) -> list[dict]:
             )
 
         for idx in config.indexers:
-            if idx.name and idx.url and not _looks_like_movie_categories(idx.categories):
+            if getattr(idx, "enabled", True) and idx.name and idx.url and not _looks_like_movie_categories(idx.categories):
                 key = (idx.name, tuple(idx.categories))
                 if key not in _category_warnings_seen:
                     _category_warnings_seen.add(key)
@@ -133,14 +158,59 @@ async def search_for_movie(movie_id: int) -> list[dict]:
                 try:
                     client = NewznabClient(idx_cfg)
                     if movie.imdb_id:
-                        return await client.search_by_imdb(movie.imdb_id), False
-                    query = f"{movie.title} {movie.year}" if movie.year else movie.title
-                    return await client.search_by_query(query), False
+                        detail = await client.search_detailed(
+                            {
+                                "t": "movie",
+                                "imdbid": movie.imdb_id.lstrip("tt") if movie.imdb_id.startswith("tt") else movie.imdb_id,
+                                "apikey": idx_cfg.api_key,
+                                "cat": ",".join(str(c) for c in idx_cfg.categories),
+                                "limit": 100,
+                            }
+                        )
+                    else:
+                        query = f"{movie.title} {movie.year}" if movie.year else movie.title
+                        detail = await client.search_detailed(
+                            {
+                                "t": "search",
+                                "q": query,
+                                "apikey": idx_cfg.api_key,
+                                "cat": ",".join(str(c) for c in idx_cfg.categories),
+                                "limit": 100,
+                            }
+                        )
+                    if detail.get("error"):
+                        rate_limited = bool(detail.get("rate_limited")) or is_rate_limit_signal(
+                            status_code=detail.get("status_code"),
+                            error=str(detail.get("error") or ""),
+                        )
+                        if rate_limited:
+                            until = _mark_indexer_rate_limited(idx_cfg, detail)
+                            await emit_search_warning(
+                                "Indexer API quota or rate limit reached; pausing this indexer temporarily.",
+                                {"indexer": idx_cfg.name, "paused_until": until.isoformat()},
+                            )
+                        raise detail.get("exception") or RuntimeError(str(detail.get("error")))
+                    return detail.get("parsed_results") or [], False
                 except Exception as e:
                     logger.error(f"Indexer {idx_cfg.name} search failed: {normalize_exception(e)}")
                     return [], True
 
-            direct_indexers = [idx for idx in config.indexers if idx.name and idx.url]
+            direct_indexers = []
+            for idx in config.indexers:
+                if not (getattr(idx, "enabled", True) and idx.name and idx.url):
+                    continue
+                available, paused_until = _is_indexer_available(idx)
+                if not available:
+                    if paused_until:
+                        logger.info(
+                            "Skipping indexer {} for {}: paused until {} after rate limit",
+                            idx.name,
+                            movie.title,
+                            paused_until.isoformat(),
+                        )
+                    continue
+                direct_indexers.append(idx)
+
             indexer_attempts += len(direct_indexers)
             results_per_indexer = await asyncio.gather(*[_search_one(idx) for idx in direct_indexers])
             for r, failed in results_per_indexer:
@@ -216,6 +286,7 @@ async def search_for_movie(movie_id: int) -> list[dict]:
                     resolution=parsed.resolution,
                     video_codec=parsed.video_codec,
                     audio_codec=parsed.audio_codec,
+                    audio_channels=parsed.audio_channels,
                     source=parsed.source,
                     hdr=parsed.hdr,
                     languages=",".join(parsed.languages or []),
@@ -323,6 +394,7 @@ async def search_for_movie(movie_id: int) -> list[dict]:
                 "resolution": s.resolution,
                 "video_codec": s.video_codec,
                 "audio_codec": s.audio_codec,
+                "audio_channels": s.audio_channels,
                 "source": s.source,
                 "age_days": s.age_days,
                 "hdr": s.hdr,

@@ -3,7 +3,7 @@
 ; Run build-installer.ps1 to generate this automatically.
 
 #define MyAppName "Slimarr"
-#define MyAppVersion "1.5.0.0"
+#define MyAppVersion "1.6.0.0"
 #define MyAppPublisher "Slimarr"
 #define MyAppURL "https://github.com/theantipopau/slimarr"
 #define MyAppExeName "Slimarr.exe"
@@ -69,7 +69,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\start.bat"; WorkingDir: "{a
 
 [Registry]
 ; Windows startup (optional task)
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Tasks: startup; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"" --tray"; Tasks: startup; Flags: uninsdeletevalue
 
 [Run]
 ; Launch Slimarr after install (checkbox is checked by default)

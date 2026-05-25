@@ -4,6 +4,44 @@ All notable changes to Slimarr are documented here.
 
 ---
 
+## [1.6.0.0] - 2026-05-25
+
+### Preference engine and live reliability
+
+#### Quality priorities
+
+- Added per-movie weighted quality priorities for 4K, HDR, Dolby Vision, Atmos,
+  TrueHD, 5.1+, and 7.1.
+- Added priority-aware compare scoring so matching candidates receive ranking
+  boosts without hiding the existing safety policy.
+- Added explicit Dolby Vision priority handling so users who choose DV can allow
+  it intentionally even when the default compatibility safety mode is enabled.
+- Added audio channel persistence for search results and exposed audio codec /
+  channel badges in Movie Detail search results.
+- Added candidate detail visibility for the priority-score contribution.
+
+#### Live-system reliability
+
+- Added direct Newznab indexer cooldowns after quota/rate-limit responses so an
+  exhausted indexer is paused instead of hammered every movie.
+- Added per-indexer enable toggles and configurable rate-limit cooldown minutes
+  in Settings.
+- Redacted sensitive API keys and tokens from normal runtime exception logs, TMDB
+  lookup failures, downloader errors, and orphan scanner logs.
+- Improved automation summaries so protected titles, no-candidate outcomes, dry
+  runs, and review-required items are not counted as hard failures.
+
+#### Windows launcher
+
+- Fixed Windows startup registry entries and generated installer launcher scripts
+  to start Slimarr with `--tray`, restoring the tray icon after restart/login.
+
+#### Tests and build
+
+- Added regression coverage for priority scoring and explicit Dolby Vision
+  preference behavior.
+- Rebuilt the bundled frontend assets for the v1.6 UI.
+
 ## [1.5.0.0] - 2026-05-15
 
 ### v1.5 foundation (architecture and quality-intent groundwork)
