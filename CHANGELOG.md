@@ -4,6 +4,59 @@ All notable changes to Slimarr are documented here.
 
 ---
 
+## [1.6.1.0] - 2026-05-27
+
+### NAS resilience and UI polish
+
+#### NAS/load safety
+
+- Added cycle cooldown enforcement (`schedule.min_cycle_interval_minutes`) so
+  scheduler pulses can skip expensive full cycles when the previous cycle is too
+  recent.
+- Enforced `schedule.max_downloads_per_night` in the orchestrator and applied
+  post-replacement `schedule.throttle_seconds` pacing between successful
+  replacements to reduce back-to-back write pressure.
+- Added `files.enable_media_probe` so operators can disable scan-time media
+  probing for NAS-heavy environments where extra file reads may destabilize
+  network-mounted storage.
+- Added NAS path targeting (`files.nas_path_prefixes`) plus
+  `comparison.min_savings_mb_for_nas` to block low-value replacements on
+  network-mounted movie paths (for example `Z:\\Movies`) and reduce frequent
+  write churn.
+- Added recycle-bin stats caching in `/system/recycling-bin` to avoid repeated
+  recursive folder walks on every UI poll when the recycle path is a network
+  share.
+
+#### UI polish
+
+- Updated Settings and System recycle-bin status polling cadence from 15 seconds
+  to 60 seconds and skipped polling while browser tabs are hidden.
+- Added new Settings controls for media-probe fallback and minimum cycle
+  interval tuning.
+- Added a new System "NAS Pressure" panel with 24-hour NAS write activity,
+  NAS-policy reject counters, tracked NAS paths visibility, and one-click
+  stability presets (`gentle`, `balanced`, `aggressive`).
+- Added a first-run Welcome Setup flow that asks for NAS path prefix and
+  preferred stability profile, then applies safe schedule/NAS defaults
+  automatically.
+- Added a Dashboard NAS-pressure recommendation banner with one-click
+  "Apply Gentle" and "Apply Balanced" actions when NAS activity risk rises.
+- Added Dashboard "Quick Start Checklist" progress card with direct links to
+  required setup areas (Plex, search provider, NAS path, first scan).
+- Added Settings "Show Help" mode with contextual beginner guidance blocks for
+  key sections (Plex, rules, files, schedule).
+- Added compact Dashboard system-health summary strip for at-a-glance status of
+  integrations, NAS pressure, and cycle readiness.
+- Added "Restore Previous" action for NAS presets (Dashboard and System) so
+  users can safely revert after testing profile changes.
+- Added audio-quality pills to movie cards/detail headers so users can see
+  resolution, video codec, and audio codec together at a glance.
+- Added global audio preference ordering (`comparison.preferred_audio_codecs`) so
+  users can set preferred audio formats once and apply that ranking across all
+  movies.
+- Added optional strict audio mode (`comparison.require_preferred_audio_match`)
+  to reject candidates that do not match the configured preferred audio list.
+
 ## [1.6.0.0] - 2026-05-25
 
 ### Preference engine and live reliability

@@ -35,10 +35,10 @@ const links = [
 
 export default function Sidebar() {
   return (
-    <aside className="flex h-full min-h-0 w-56 flex-col gap-1 border-r border-white/10 bg-[#0d1721] py-6 shadow-2xl shadow-black/30">
+    <aside className="flex h-full min-h-0 w-56 flex-col gap-1 border-r border-white/10 bg-[linear-gradient(180deg,#0d1721_0%,#0a121b_100%)] py-6 shadow-2xl shadow-black/40">
       {/* Logo */}
       <div className="px-4 mb-6 flex items-center gap-2">
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04]">
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-emerald-300/20 bg-emerald-300/5">
           <img src={logoSrc} alt="Slimarr" className="h-7 w-auto" />
         </div>
         <span className="text-xl font-bold">
@@ -46,6 +46,8 @@ export default function Sidebar() {
           <span className="text-white">arr</span>
         </span>
       </div>
+
+      <div className="px-4 pb-2 text-[10px] uppercase tracking-[0.16em] text-gray-500">Operations</div>
 
       <nav className="flex-1 min-h-0 overflow-y-auto px-2">
         {links.map(({ to, icon: Icon, label }) => (
@@ -55,14 +57,14 @@ export default function Sidebar() {
             end={to === '/'}
             className={({ isActive }) =>
               clsx(
-                'flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+                'group flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200',
                 isActive
-                  ? 'bg-brand-green text-white shadow-lg shadow-green-950/30'
-                  : 'text-gray-300 hover:bg-white/[0.07] hover:text-white'
+                  ? 'bg-brand-green text-white shadow-[0_10px_28px_-14px_rgba(31,191,143,0.85)]'
+                  : 'text-gray-300 hover:bg-white/[0.07] hover:text-white hover:translate-x-[1px]'
               )
             }
           >
-            <Icon size={18} className="shrink-0" />
+            <Icon size={18} className="shrink-0 opacity-90 group-hover:opacity-100" />
             {label}
           </NavLink>
         ))}

@@ -288,6 +288,7 @@ export default function MovieDetail() {
           <div className="flex gap-2 mt-3 flex-wrap">
             {movie.resolution && <QualityBadge type="res" value={movie.resolution} />}
             {movie.video_codec && <QualityBadge type="codec" value={movie.video_codec} />}
+            {movie.audio_codec && <QualityBadge type="audio" value={movie.audio_codec} />}
           </div>
 
           <div className="mt-3 text-sm text-gray-400 space-y-1">

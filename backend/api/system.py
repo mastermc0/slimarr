@@ -11,7 +11,7 @@ import sys
 import time
 import tempfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
@@ -25,6 +25,7 @@ from backend.api.models import (
     DuplicateCleanupPreviewResponse,
     HealthMatrixResponse,
     IntegrationMatrixResponse,
+    NasPressureResponse,
     PreflightResponse,
     RecyclingBinEmptyResponse,
     RecyclingBinInfoResponse,
@@ -40,7 +41,7 @@ from backend.api.models import (
 )
 from backend.auth.dependencies import get_current_user
 from backend.core.orchestrator import get_status, is_running, request_stop
-from backend.database import DecisionAuditLog, Download, Movie, async_session
+from backend.database import ActivityLog, DecisionAuditLog, Download, Movie, async_session
 from backend.scheduler.scheduler import get_scheduler, list_jobs
 from backend.utils.responses import not_found, get_correlation_id
 from backend.version import APP_VERSION
@@ -81,6 +82,11 @@ _services_health_cache: dict[str, Any] | None = None
 _services_health_cache_at = 0.0
 _services_health_lock = asyncio.Lock()
 
+_RECYCLE_STATS_TTL_SECONDS = 60.0
+_recycle_stats_cache: dict[str, Any] | None = None
+_recycle_stats_cache_at = 0.0
+_recycle_stats_lock = asyncio.Lock()
+
 
 def invalidate_services_health_cache() -> None:
     """Clear cached integration health after settings changes."""
@@ -109,6 +115,44 @@ def _dir_stats(path: str) -> tuple[int, int]:
                 # Ignore unreadable files but keep scanning
                 pass
     return files_count, total_bytes
+
+
+def _invalidate_recycle_stats_cache() -> None:
+    global _recycle_stats_cache, _recycle_stats_cache_at
+    _recycle_stats_cache = None
+    _recycle_stats_cache_at = 0.0
+
+
+async def _dir_stats_cached(path: str) -> tuple[int, int]:
+    global _recycle_stats_cache, _recycle_stats_cache_at
+
+    now = time.time()
+    cached = _recycle_stats_cache
+    if (
+        cached
+        and cached.get("path") == path
+        and (now - _recycle_stats_cache_at) <= _RECYCLE_STATS_TTL_SECONDS
+    ):
+        return int(cached.get("files", 0)), int(cached.get("bytes", 0))
+
+    async with _recycle_stats_lock:
+        now = time.time()
+        cached = _recycle_stats_cache
+        if (
+            cached
+            and cached.get("path") == path
+            and (now - _recycle_stats_cache_at) <= _RECYCLE_STATS_TTL_SECONDS
+        ):
+            return int(cached.get("files", 0)), int(cached.get("bytes", 0))
+
+        files_count, total_bytes = await asyncio.to_thread(_dir_stats, path)
+        _recycle_stats_cache = {
+            "path": path,
+            "files": files_count,
+            "bytes": total_bytes,
+        }
+        _recycle_stats_cache_at = now
+        return files_count, total_bytes
 
 
 def _check(status: str, name: str, message: str, detail: Any | None = None) -> dict[str, Any]:
@@ -143,6 +187,23 @@ def _redact_sensitive(data: Any) -> Any:
     if isinstance(data, list):
         return [_redact_sensitive(v) for v in data]
     return data
+
+
+def _normalize_path(path: str | None) -> str:
+    return str(path or "").replace("\\", "/").strip().lower().rstrip("/")
+
+
+def _path_matches_prefix(path: str | None, prefixes: list[str]) -> bool:
+    norm = _normalize_path(path)
+    if not norm:
+        return False
+    for prefix in prefixes:
+        check = _normalize_path(prefix)
+        if not check:
+            continue
+        if norm == check or norm.startswith(check + "/"):
+            return True
+    return False
 
 
 def _serializable_search_detail(detail: dict[str, Any]) -> dict[str, Any]:
@@ -453,7 +514,7 @@ async def recycling_bin_info(user=Depends(get_current_user)):
         }
 
     exists = os.path.isdir(recycle_path)
-    files_count, total_bytes = _dir_stats(recycle_path) if exists else (0, 0)
+    files_count, total_bytes = await _dir_stats_cached(recycle_path) if exists else (0, 0)
     return {
         "enabled": True,
         "path": recycle_path,
@@ -495,6 +556,8 @@ async def recycling_bin_empty(user=Depends(get_current_user)):
         except Exception:
             # Continue cleaning even if one entry fails
             continue
+
+    _invalidate_recycle_stats_cache()
 
     return {
         "status": "emptied",
@@ -1469,6 +1532,104 @@ async def decision_audit(limit: int = 50, decision: str = "", user=Depends(get_c
         }
         for row in rows
     ]
+
+
+@router.get("/nas-pressure", response_model=NasPressureResponse)
+async def nas_pressure(user=Depends(get_current_user)):
+    """Summarize recent NAS-targeted write pressure and policy effectiveness."""
+    from backend.config import get_config
+
+    cfg = get_config()
+    nas_prefixes = [str(p).strip() for p in getattr(cfg.files, "nas_path_prefixes", []) if str(p or "").strip()]
+    min_savings_mb_for_nas = max(0, int(getattr(cfg.comparison, "min_savings_mb_for_nas", 0) or 0))
+    nas_policy_enabled = bool(nas_prefixes and min_savings_mb_for_nas > 0)
+
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    replacements_24h = 0
+    replacement_bytes_24h = 0
+    movie_rollup: dict[str, dict[str, int | str]] = {}
+
+    async with async_session() as db:
+        replacement_rows = (
+            await db.execute(
+                select(ActivityLog)
+                .where(
+                    ActivityLog.event == "replace:completed",
+                    ActivityLog.created_at >= since,
+                )
+                .order_by(ActivityLog.created_at.desc())
+            )
+        ).scalars().all()
+
+        for row in replacement_rows:
+            target_path = row.new_file_path or row.old_file_path
+            if not _path_matches_prefix(target_path, nas_prefixes):
+                continue
+            replacements_24h += 1
+            replacement_bytes_24h += int(row.new_size or 0)
+            title = str(row.movie_title or "Unknown")
+            if title not in movie_rollup:
+                movie_rollup[title] = {"title": title, "count": 0, "written_bytes": 0}
+            movie_rollup[title]["count"] = int(movie_rollup[title]["count"]) + 1
+            movie_rollup[title]["written_bytes"] = int(movie_rollup[title]["written_bytes"]) + int(row.new_size or 0)
+
+        reject_reasons = (
+            await db.execute(
+                select(DecisionAuditLog.reject_reason)
+                .where(
+                    DecisionAuditLog.decision == "reject",
+                    DecisionAuditLog.created_at >= since,
+                )
+            )
+        ).scalars().all()
+
+    nas_rejects_24h = sum(1 for reason in reject_reasons if "NAS minimum" in str(reason or ""))
+
+    top_movies = sorted(
+        movie_rollup.values(),
+        key=lambda item: (int(item.get("count", 0)), int(item.get("written_bytes", 0))),
+        reverse=True,
+    )[:5]
+
+    pressure_state = "low"
+    if replacements_24h >= 12 or replacement_bytes_24h >= 250 * 1024 * 1024 * 1024:
+        pressure_state = "high"
+    elif replacements_24h >= 5 or replacement_bytes_24h >= 80 * 1024 * 1024 * 1024:
+        pressure_state = "medium"
+
+    recommended_preset = "balanced"
+    if pressure_state == "high":
+        recommended_preset = "gentle"
+    elif pressure_state == "low":
+        recommended_preset = "aggressive"
+
+    recommendations: list[str] = []
+    if not nas_prefixes:
+        recommendations.append("Add NAS path prefixes (for example Z:/Movies) in Settings to track network-share pressure accurately.")
+    if not nas_policy_enabled:
+        recommendations.append("Enable NAS savings floor by setting Minimum Savings for NAS Paths (MB) above 0.")
+    if pressure_state == "high":
+        recommendations.append("Apply the Gentle NAS preset to lower scan and write churn during peak periods.")
+    elif pressure_state == "medium":
+        recommendations.append("Balanced NAS preset is recommended to keep upgrades steady without bursty write activity.")
+    else:
+        recommendations.append("Current NAS pressure is low; you can keep current settings or use Aggressive only if NAS remains stable.")
+
+    return {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "pressure_state": pressure_state,
+        "recommended_preset": recommended_preset,
+        "nas_prefixes": nas_prefixes,
+        "nas_policy_enabled": nas_policy_enabled,
+        "recent": {
+            "replacements_24h": replacements_24h,
+            "replacement_bytes_24h": replacement_bytes_24h,
+            "nas_rejects_24h": nas_rejects_24h,
+            "unique_movies_replaced_24h": len(movie_rollup),
+        },
+        "top_movies": top_movies,
+        "recommendations": recommendations,
+    }
 
 
 # ---------------------------------------------------------------------------

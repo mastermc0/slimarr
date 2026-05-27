@@ -104,10 +104,11 @@ export default function PosterCard({ movie }: Props) {
           <p className="text-xs text-gray-400">{movie.year}</p>
           <p className="text-xs text-gray-500">{formatGB(movie.file_size)}</p>
         </div>
-        {(movie.resolution || movie.video_codec) && (
+        {(movie.resolution || movie.video_codec || movie.audio_codec) && (
           <div className="flex gap-1 mt-1 flex-wrap">
             {movie.resolution && <QualityBadge type="res" value={movie.resolution} />}
             {movie.video_codec && <QualityBadge type="codec" value={movie.video_codec} />}
+            {movie.audio_codec && <QualityBadge type="audio" value={movie.audio_codec} />}
           </div>
         )}
       </div>

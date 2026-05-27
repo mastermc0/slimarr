@@ -84,9 +84,12 @@ class TmdbConfig(BaseModel):
 
 class ComparisonConfig(BaseModel):
     min_savings_percent: float = 10.0
+    min_savings_mb_for_nas: int = 0
     allow_resolution_downgrade: bool = False
     downgrade_min_savings_percent: float = 40.0
     preferred_codecs: list[str] = ["av1", "h265"]
+    preferred_audio_codecs: list[str] = []
+    require_preferred_audio_match: bool = False
     preferred_language: str = "english"
     max_candidate_age_days: int = 3650
     minimum_file_size_mb: int = 500
@@ -113,6 +116,8 @@ class FilesConfig(BaseModel):
     recycling_bin: str = ""   # Empty = delete originals directly (recommended). Set a path to keep copies.
     recycling_bin_cleanup_days: int = 30
     verify_after_download: bool = True
+    enable_media_probe: bool = True
+    nas_path_prefixes: list[str] = []
     plex_path_mappings: list[PathMapping] = []
 
 
@@ -122,6 +127,7 @@ class ScheduleConfig(BaseModel):
     start_time: str = "01:00"
     end_time: str = "07:00"
     days: list[str] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    min_cycle_interval_minutes: int = 60
     max_downloads_per_night: int = 10
     throttle_seconds: int = 30
     max_active_download_hours: int = 24

@@ -10,5 +10,8 @@ export default function ProtectedRoute({ children }: Props) {
   if (!auth.isLoggedIn()) {
     return <Navigate to="/login" replace />
   }
+  if (!auth.isSetupWizardDone() && window.location.pathname !== '/welcome') {
+    return <Navigate to="/welcome" replace />
+  }
   return <>{children}</>
 }

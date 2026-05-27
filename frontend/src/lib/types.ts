@@ -275,3 +275,25 @@ export interface UtilitiesMaintenanceInsights {
   recommendations: MaintenanceInsightRecommendation[]
   telemetry: Record<string, unknown>
 }
+
+export interface NasPressureTopMovie {
+  title: string
+  count: number
+  written_bytes: number
+}
+
+export interface NasPressure {
+  checked_at: string
+  pressure_state: 'low' | 'medium' | 'high' | string
+  recommended_preset: 'gentle' | 'balanced' | 'aggressive' | string
+  nas_prefixes: string[]
+  nas_policy_enabled: boolean
+  recent: {
+    replacements_24h: number
+    replacement_bytes_24h: number
+    nas_rejects_24h: number
+    unique_movies_replaced_24h: number
+  }
+  top_movies: NasPressureTopMovie[]
+  recommendations: string[]
+}

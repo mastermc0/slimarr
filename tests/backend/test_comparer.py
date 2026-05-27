@@ -85,6 +85,75 @@ class CompareReleaseTests(unittest.TestCase):
         self.assertEqual(result.decision, "reject")
         self.assertIn("English audio required", result.reject_reason or "")
 
+    def test_global_preferred_audio_increases_matching_candidate_score(self) -> None:
+        cfg = self._cfg()
+        cfg.comparison.preferred_audio_codecs = ["atmos", "truehd", "dts-hd ma"]
+
+        with patch("backend.core.comparer.get_config", return_value=cfg):
+            preferred = compare_release(
+                local_size=2_000_000_000,
+                local_resolution="1080p",
+                local_codec="h264",
+                candidate_size=1_200_000_000,
+                candidate_title="The.Matrix.2022.1080p.WEB-DL.x265.Atmos-GRP",
+                candidate_age_days=15,
+                movie_title="The Matrix",
+                movie_year=2022,
+            )
+            non_preferred = compare_release(
+                local_size=2_000_000_000,
+                local_resolution="1080p",
+                local_codec="h264",
+                candidate_size=1_200_000_000,
+                candidate_title="The.Matrix.2022.1080p.WEB-DL.x265.AAC-GRP",
+                candidate_age_days=15,
+                movie_title="The Matrix",
+                movie_year=2022,
+            )
+
+        self.assertEqual(preferred.decision, "accept")
+        self.assertEqual(non_preferred.decision, "accept")
+        self.assertGreater(preferred.score, non_preferred.score)
+
+    def test_strict_preferred_audio_rejects_non_matching_candidates(self) -> None:
+        cfg = self._cfg()
+        cfg.comparison.preferred_audio_codecs = ["atmos", "truehd"]
+        cfg.comparison.require_preferred_audio_match = True
+
+        with patch("backend.core.comparer.get_config", return_value=cfg):
+            result = compare_release(
+                local_size=2_000_000_000,
+                local_resolution="1080p",
+                local_codec="h264",
+                candidate_size=1_200_000_000,
+                candidate_title="The.Matrix.2022.1080p.WEB-DL.x265.AAC-GRP",
+                candidate_age_days=15,
+                movie_title="The Matrix",
+                movie_year=2022,
+            )
+
+        self.assertEqual(result.decision, "reject")
+        self.assertIn("Preferred audio required", result.reject_reason or "")
+
+    def test_strict_preferred_audio_accepts_matching_candidates(self) -> None:
+        cfg = self._cfg()
+        cfg.comparison.preferred_audio_codecs = ["atmos", "truehd"]
+        cfg.comparison.require_preferred_audio_match = True
+
+        with patch("backend.core.comparer.get_config", return_value=cfg):
+            result = compare_release(
+                local_size=2_000_000_000,
+                local_resolution="1080p",
+                local_codec="h264",
+                candidate_size=1_200_000_000,
+                candidate_title="The.Matrix.2022.1080p.WEB-DL.x265.Atmos-GRP",
+                candidate_age_days=15,
+                movie_title="The Matrix",
+                movie_year=2022,
+            )
+
+        self.assertEqual(result.decision, "accept")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,5 @@
 ﻿# build-installer.ps1 - Build the Slimarr Windows installer
-# Output: dist/installer/SlimarrSetup-1.6.0.0.exe
+# Output: dist/installer/SlimarrSetup-1.6.1.0.exe
 #
 # Prerequisites (install once):
 #   pip install pyinstaller          (in your venv)
@@ -115,7 +115,7 @@ exit /b 0
 
 Write-Host ""
 Write-Host "  +-------------------------------------+" -ForegroundColor Green
-Write-Host "  |   Slimarr Installer Builder v1.6   |" -ForegroundColor Green
+Write-Host "  |  Slimarr Installer Builder v1.6.1  |" -ForegroundColor Green
 Write-Host "  +-------------------------------------+" -ForegroundColor Green
 
 # ---- 0. Sanity checks -------------------------------------------------------
@@ -190,11 +190,14 @@ $cfgLines = @(
     '',
     'comparison:',
     '  min_savings_percent: 10.0',
+    '  min_savings_mb_for_nas: 0',
     '  allow_resolution_downgrade: false',
     '  downgrade_min_savings_percent: 40.0',
     '  preferred_codecs:',
     '    - av1',
     '    - h265',
+    '  preferred_audio_codecs: []',
+    '  require_preferred_audio_match: false',
     '  preferred_language: english',
     '  max_candidate_age_days: 3650',
     '  minimum_file_size_mb: 500',
@@ -208,6 +211,7 @@ $cfgLines = @(
     '  start_time: "23:00"',
     '  end_time: "05:00"',
     '  days: [mon, tue, wed, thu, fri, sat, sun]',
+    '  min_cycle_interval_minutes: 60',
     '  max_downloads_per_night: 10',
     '  throttle_seconds: 30',
     '  max_active_download_hours: 24',
@@ -245,6 +249,8 @@ $cfgLines = @(
     '  recycling_bin: ""',
     '  recycling_bin_cleanup_days: 30',
     '  verify_after_download: true',
+    '  enable_media_probe: true',
+    '  nas_path_prefixes: []',
     '  plex_path_mappings: []',
     '',
     'indexers: []'

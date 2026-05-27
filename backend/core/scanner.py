@@ -143,7 +143,8 @@ async def _run_scan() -> int:
             probe: dict[str, object] = {}
             file_path = pm.get("file_path")
             should_probe = bool(
-                file_path
+                config.files.enable_media_probe
+                and file_path
                 and (
                     not pm.get("bitrate")
                     or not pm.get("video_codec")

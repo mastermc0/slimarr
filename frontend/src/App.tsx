@@ -19,6 +19,7 @@ const System = lazy(() => import('@/pages/System'))
 const SearchDiagnostics = lazy(() => import('@/pages/SearchDiagnostics'))
 const ContainerDiagnostics = lazy(() => import('@/pages/ContainerDiagnostics'))
 const TVShows = lazy(() => import('@/pages/TVShows'))
+const WelcomeSetup = lazy(() => import('@/pages/WelcomeSetup'))
 
 function PageLoader() {
   return (
@@ -45,6 +46,7 @@ export default function App() {
                 }
               >
                 <Route index element={<Dashboard />} />
+                <Route path="welcome" element={<WelcomeSetup />} />
                 <Route path="library" element={<Library />} />
                 <Route path="library/:id" element={<MovieDetail />} />
                 <Route path="activity" element={<Activity />} />

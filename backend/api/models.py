@@ -315,6 +315,17 @@ class UtilitiesMaintenanceInsightsResponse(BaseModel):
     telemetry: dict[str, Any]
 
 
+class NasPressureResponse(BaseModel):
+    checked_at: str
+    pressure_state: str
+    recommended_preset: str
+    nas_prefixes: list[str] = Field(default_factory=list)
+    nas_policy_enabled: bool
+    recent: dict[str, Any]
+    top_movies: list[dict[str, Any]] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+
+
 class SystemStatusResponse(BaseModel):
     cycle: dict[str, Any]
     scheduler_running: bool

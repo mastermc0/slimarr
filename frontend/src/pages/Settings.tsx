@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { useToast } from '@/components/Toast'
 import TestConnectionButton from '@/components/TestConnectionButton'
-import { CheckCircle, Plus, Trash2, XCircle } from 'lucide-react'
+import { CheckCircle, Info, Plus, Trash2, XCircle } from 'lucide-react'
 
 interface Indexer {
   enabled?: boolean
@@ -41,6 +41,7 @@ export default function Settings() {
   const [recyclingLoading, setRecyclingLoading] = useState(false)
   const [recyclingEmptying, setRecyclingEmptying] = useState(false)
   const [capabilities, setCapabilities] = useState<DownloadClientCapabilities | null>(null)
+  const [showHelp, setShowHelp] = useState(true)
 
   const hasUnsaved = settings && savedSettings && JSON.stringify(settings) !== JSON.stringify(savedSettings)
 
@@ -81,12 +82,14 @@ export default function Settings() {
 
     const numericChecks: Array<[string, string[], number, number]> = [
       ['Min savings %', ['comparison', 'min_savings_percent'], 0, 100],
+      ['Min savings for NAS paths (MB)', ['comparison', 'min_savings_mb_for_nas'], 0, 102400],
       ['Downgrade min savings %', ['comparison', 'downgrade_min_savings_percent'], 0, 100],
       ['Minimum file size MB', ['comparison', 'minimum_file_size_mb'], 1, 1000000],
       ['Max candidate age days', ['comparison', 'max_candidate_age_days'], 1, 36500],
       ['Max quality upgrade size GB', ['comparison', 'max_quality_upgrade_size_gb'], 1, 100],
       ['Max quality upgrade size increase %', ['comparison', 'max_size_increase_percent_for_quality_upgrade'], 0, 1000],
       ['Recycling cleanup days', ['files', 'recycling_bin_cleanup_days'], 1, 3650],
+      ['Min cycle interval (minutes)', ['schedule', 'min_cycle_interval_minutes'], 0, 1440],
       ['Max downloads per night', ['schedule', 'max_downloads_per_night'], 1, 1000],
       ['Throttle seconds', ['schedule', 'throttle_seconds'], 0, 86400],
       ['Max active download hours', ['schedule', 'max_active_download_hours'], 1, 168],
@@ -160,8 +163,10 @@ export default function Settings() {
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
-      void loadRecyclingInfo()
-    }, 15000)
+      if (!document.hidden) {
+        void loadRecyclingInfo()
+      }
+    }, 60000)
     return () => window.clearInterval(intervalId)
   }, [])
 
@@ -208,11 +213,18 @@ export default function Settings() {
     storage_path_lookup: 'Storage paths',
   }
 
-  function field(label: string, path: string[], type: string = 'text') {
+  function field(label: string, path: string[], type: string = 'text', tooltip: string = '') {
     const val = path.reduce((o: unknown, k) => (o as Record<string, unknown>)?.[k], settings) as string | number | undefined
     return (
       <div>
-        <label className="block text-xs text-gray-400 mb-1">{label}</label>
+        <label className="block text-xs text-gray-400 mb-1 flex items-center gap-1.5">
+          <span>{label}</span>
+          {tooltip && (
+            <span title={tooltip} className="inline-flex text-cyan-300/90 cursor-help">
+              <Info size={12} />
+            </span>
+          )}
+        </label>
         <input
           type={type}
           value={val ?? ''}
@@ -224,10 +236,23 @@ export default function Settings() {
     )
   }
 
+  function hint(text: string) {
+    if (!showHelp) return null
+    return <p className="text-xs text-cyan-200/90 bg-cyan-500/10 border border-cyan-500/25 rounded-md px-2.5 py-2">{text}</p>
+  }
+
   return (
     <div className="space-y-6 max-w-2xl">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <h1 className="text-2xl font-bold flex-1">Settings</h1>
+        <button
+          onClick={() => setShowHelp((v) => !v)}
+          className="inline-flex items-center gap-1 rounded-md border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-200 hover:bg-cyan-500/20"
+          title="Toggle beginner helper text"
+        >
+          <Info size={12} />
+          {showHelp ? 'Hide Help' : 'Show Help'}
+        </button>
         {hasUnsaved && (
           <span className="text-xs text-yellow-400 font-medium">Unsaved changes — save before testing connections</span>
         )}
@@ -290,6 +315,7 @@ export default function Settings() {
             body={{ url: (settings?.plex as Record<string,unknown>)?.url, token: (settings?.plex as Record<string,unknown>)?.token }}
           />
         </div>
+        {hint('Start here: if Plex does not connect, library scan and replacement workflows will not run correctly.')}
         {field('URL', ['plex', 'url'])}
         {field('Token', ['plex', 'token'], 'password')}
       </section>
@@ -625,6 +651,7 @@ export default function Settings() {
       {/* Comparison */}
       <section id="rules" className="bg-gray-900 rounded-xl p-5 space-y-3 scroll-mt-4">
         <h2 className="font-semibold">Comparison Rules</h2>
+        {hint('These rules control how strict Slimarr is when replacing files. Raise NAS minimum savings to reduce small, frequent writes.')}
         {field('Min Savings %', ['comparison', 'min_savings_percent'], 'number')}
         {field('Downgrade Min Savings %', ['comparison', 'downgrade_min_savings_percent'], 'number')}
         {field('Minimum File Size (MB)', ['comparison', 'minimum_file_size_mb'], 'number')}
@@ -659,6 +686,20 @@ export default function Settings() {
             placeholder="av1, h265"
           />
         </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Preferred Audio (comma-separated, applied globally)</label>
+          <input
+            type="text"
+            value={((settings?.comparison as Record<string,unknown>)?.preferred_audio_codecs as string[] | undefined)?.join(', ') ?? ''}
+            onChange={(e) => {
+              const val = e.target.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+              set(['comparison', 'preferred_audio_codecs'], val as unknown as string)
+            }}
+            className="w-full bg-gray-800 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-green"
+            placeholder="atmos, truehd, dts-hd ma, 7.1"
+          />
+          <p className="text-xs text-gray-500 mt-1">Used as ranking preference for all movies. First match has highest priority.</p>
+        </div>
         <div className="flex items-center gap-3">
           <input
             type="checkbox"
@@ -670,12 +711,14 @@ export default function Settings() {
           <label htmlFor="allow_downgrade" className="text-sm">Allow resolution downgrade (if savings are large enough)</label>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          {field('Max Quality Upgrade Size (GB)', ['comparison', 'max_quality_upgrade_size_gb'], 'number')}
-          {field('Max Quality Upgrade Increase %', ['comparison', 'max_size_increase_percent_for_quality_upgrade'], 'number')}
+          {field('Minimum Savings for NAS Paths (MB)', ['comparison', 'min_savings_mb_for_nas'], 'number', 'Block NAS replacements unless this minimum space saving is reached.')}
+          {field('Max Quality Upgrade Size (GB)', ['comparison', 'max_quality_upgrade_size_gb'], 'number', 'Largest allowed file size when accepting a larger replacement for quality reasons.')}
+          {field('Max Quality Upgrade Increase %', ['comparison', 'max_size_increase_percent_for_quality_upgrade'], 'number', 'Maximum allowed percentage increase over current file size for quality-upgrade exceptions.')}
         </div>
         {[
           ['avoid_dolby_vision', 'Avoid Dolby Vision releases'],
           ['allow_dolby_vision_with_hdr_fallback', 'Allow DV when HDR fallback is detected'],
+          ['require_preferred_audio_match', 'Require preferred audio match (strict mode)'],
           ['require_english_audio', 'Require English audio when English is preferred'],
           ['reject_dual_audio', 'Reject dual-audio releases'],
           ['reject_multi_audio', 'Reject multi-audio releases'],
@@ -698,13 +741,46 @@ export default function Settings() {
       {/* Files */}
       <section id="files" className="bg-gray-900 rounded-xl p-5 space-y-3 scroll-mt-4">
         <h2 className="font-semibold">Files</h2>
+        {hint('If movies live on a NAS (for example Z:/Movies), add that prefix so Slimarr can apply NAS-safe replacement behavior.')}
         {field('Recycling Bin Path', ['files', 'recycling_bin'])}
         {field('Recycling Bin Cleanup (days)', ['files', 'recycling_bin_cleanup_days'], 'number')}
+        <div className="flex items-center gap-3">
+          <input
+            type="checkbox"
+            id="enable_media_probe"
+            checked={!!((settings?.files as Record<string,unknown>)?.enable_media_probe ?? true)}
+            onChange={(e) => set(['files', 'enable_media_probe'], e.target.checked)}
+            className="w-4 h-4 accent-brand-green"
+          />
+          <label htmlFor="enable_media_probe" className="text-sm flex items-center gap-1.5">
+            <span>Enable media probe fallback during scan (disable for NAS-friendly light scans)</span>
+            <span title="When enabled, Slimarr can read media metadata directly from files when Plex metadata is missing. Disable to reduce NAS read pressure." className="inline-flex text-cyan-300/90 cursor-help">
+              <Info size={12} />
+            </span>
+          </label>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">NAS Movie Path Prefixes (comma-separated)</label>
+          <input
+            type="text"
+            value={((settings?.files as Record<string,unknown>)?.nas_path_prefixes as string[] | undefined)?.join(', ') ?? ''}
+            onChange={(e) => {
+              const prefixes = e.target.value
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean)
+              set(['files', 'nas_path_prefixes'], prefixes as unknown as string)
+            }}
+            className="w-full bg-gray-800 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-green"
+            placeholder="Z:/Movies, /mnt/nas-media/movies"
+          />
+          <p className="text-xs text-gray-500 mt-1">Used with "Minimum Savings for NAS Paths (MB)" to avoid tiny replacements on network shares.</p>
+        </div>
         <div className="mt-2 bg-gray-800/70 rounded-lg p-3 space-y-3 border border-gray-700">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-gray-200">Recycling Bin Status</p>
-              <p className="text-xs text-gray-400">Live usage, auto-refreshes every 15 seconds</p>
+              <p className="text-xs text-gray-400">Live usage, auto-refreshes every 60 seconds</p>
             </div>
             <button
               onClick={() => { void loadRecyclingInfo(true) }}
@@ -802,11 +878,14 @@ export default function Settings() {
       {/* Schedule */}
       <section id="schedule" className="bg-gray-900 rounded-xl p-5 space-y-3 scroll-mt-4">
         <h2 className="font-semibold">Schedule</h2>
+        {hint('Gentler values reduce NAS stress: larger cycle interval, fewer downloads per night, and higher throttle seconds.')}
+        <p className="text-xs text-gray-400">Tip: for NAS stability, use a larger cycle interval, lower max downloads, and higher throttle seconds.</p>
         {field('Schedule Time Zone (IANA or local)', ['schedule', 'timezone'])}
         {field('Nightly Start Time (HH:MM)', ['schedule', 'start_time'])}
         {field('Nightly End Time (HH:MM)', ['schedule', 'end_time'])}
-        {field('Max Downloads per Night', ['schedule', 'max_downloads_per_night'], 'number')}
-        {field('Throttle between downloads (seconds)', ['schedule', 'throttle_seconds'], 'number')}
+        {field('Minimum Cycle Interval (minutes)', ['schedule', 'min_cycle_interval_minutes'], 'number', 'Minimum time between full automation cycles. Higher values reduce repeated NAS scans.')}
+        {field('Max Downloads per Night', ['schedule', 'max_downloads_per_night'], 'number', 'Cap successful replacements per cycle window to prevent bursty NAS writes.')}
+        {field('Throttle between downloads (seconds)', ['schedule', 'throttle_seconds'], 'number', 'Pause between successful replacements to spread out write load on NAS storage.')}
         {field('Max Active Download Hours', ['schedule', 'max_active_download_hours'], 'number')}
       </section>
     </div>

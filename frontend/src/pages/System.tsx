@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { useSocket } from '@/hooks/useSocket'
 import { useToast } from '@/components/Toast'
-import type { DecisionAuditEntry, DuplicateCleanupPreview, HealthMatrix, PreflightResult, UtilitiesMaintenanceInsights } from '@/lib/types'
-import { Play, Square, RefreshCw, Database, Clock, Server, CheckCircle, XCircle, Trash2, ArrowUpCircle, ShieldCheck, Sparkles, GaugeCircle, HardDrive, ShieldAlert } from 'lucide-react'
+import type { DecisionAuditEntry, DuplicateCleanupPreview, HealthMatrix, NasPressure, PreflightResult, UtilitiesMaintenanceInsights } from '@/lib/types'
+import { Play, Square, RefreshCw, Database, Clock, Server, CheckCircle, XCircle, Trash2, ArrowUpCircle, ShieldCheck, Sparkles, GaugeCircle, HardDrive, ShieldAlert, SlidersHorizontal } from 'lucide-react'
 
 interface ServiceHealth {
   success: boolean
@@ -58,6 +58,7 @@ interface SystemInfo {
 }
 
 export default function System() {
+  const NAS_PROFILE_SNAPSHOT_KEY = 'slimarr_nas_profile_snapshot'
   const [status, setStatus] = useState<Record<string, unknown> | null>(null)
   const [info, setInfo] = useState<SystemInfo | null>(null)
   const [services, setServices] = useState<Record<string, ServiceHealth> | null>(null)
@@ -76,6 +77,9 @@ export default function System() {
   const [cleanupPreview, setCleanupPreview] = useState<DuplicateCleanupPreview | null>(null)
   const [cleanupPreviewLoading, setCleanupPreviewLoading] = useState(false)
   const [maintenanceInsights, setMaintenanceInsights] = useState<UtilitiesMaintenanceInsights | null>(null)
+  const [nasPressure, setNasPressure] = useState<NasPressure | null>(null)
+  const [nasPresetApplying, setNasPresetApplying] = useState<string | null>(null)
+  const [hasPresetSnapshot, setHasPresetSnapshot] = useState(false)
 
   const loadStatus = () => api.systemStatus().then(setStatus).catch(() => {})
   const loadServices = () => api.servicesHealth().then(setServices).catch(() => {})
@@ -91,6 +95,7 @@ export default function System() {
       })
   }
   const loadMaintenanceInsights = () => api.utilitiesMaintenanceInsights().then((data) => setMaintenanceInsights(data as UtilitiesMaintenanceInsights)).catch(() => {})
+  const loadNasPressure = () => api.nasPressure().then((data) => setNasPressure(data as NasPressure)).catch(() => {})
   const loadRecyclingInfo = (showLoading = false) => {
     if (showLoading) setRecyclingLoading(true)
     return api.recyclingBinInfo()
@@ -111,19 +116,21 @@ export default function System() {
     loadDecisionAudit()
     void loadCleanupPreview(true)
     loadMaintenanceInsights()
+    loadNasPressure()
     void loadRecyclingInfo(true)
     const iv = setInterval(loadStatus, 10000)
     const recycleIv = setInterval(() => {
       if (!document.hidden) {
         void loadRecyclingInfo()
       }
-    }, 15000)
+    }, 60000)
     const servicesIv = setInterval(() => {
       if (!document.hidden) {
         loadServices()
         loadHealthMatrix()
         loadDecisionAudit()
         loadMaintenanceInsights()
+        loadNasPressure()
       }
     }, 30000)
     const previewIv = setInterval(() => {
@@ -139,6 +146,10 @@ export default function System() {
     }
   }, [cleaning])
 
+  useEffect(() => {
+    setHasPresetSnapshot(localStorage.getItem(NAS_PROFILE_SNAPSHOT_KEY) !== null)
+  }, [])
+
   useSocket('scan:started', () => setScanning(true))
   useSocket('scan:completed', () => { setScanning(false); loadStatus() })
   useSocket('orchestrator:status', (d) => {
@@ -148,6 +159,128 @@ export default function System() {
   })
 
   const { toast } = useToast()
+
+  const applyNasPreset = async (preset: 'gentle' | 'balanced' | 'aggressive') => {
+    setNasPresetApplying(preset)
+    const presets: Record<string, { min_cycle_interval_minutes: number; max_downloads_per_night: number; throttle_seconds: number; min_savings_mb_for_nas: number; enable_media_probe: boolean }> = {
+      gentle: {
+        min_cycle_interval_minutes: 240,
+        max_downloads_per_night: 2,
+        throttle_seconds: 90,
+        min_savings_mb_for_nas: 700,
+        enable_media_probe: false,
+      },
+      balanced: {
+        min_cycle_interval_minutes: 180,
+        max_downloads_per_night: 3,
+        throttle_seconds: 60,
+        min_savings_mb_for_nas: 500,
+        enable_media_probe: false,
+      },
+      aggressive: {
+        min_cycle_interval_minutes: 120,
+        max_downloads_per_night: 5,
+        throttle_seconds: 30,
+        min_savings_mb_for_nas: 250,
+        enable_media_probe: true,
+      },
+    }
+
+    try {
+      const settings = await api.getSettings() as Record<string, unknown>
+      const currentSchedule = (settings.schedule as Record<string, unknown> | undefined) ?? {}
+      const currentComparison = (settings.comparison as Record<string, unknown> | undefined) ?? {}
+      const currentFiles = (settings.files as Record<string, unknown> | undefined) ?? {}
+      localStorage.setItem(
+        NAS_PROFILE_SNAPSHOT_KEY,
+        JSON.stringify({
+          schedule: {
+            min_cycle_interval_minutes: currentSchedule.min_cycle_interval_minutes,
+            max_downloads_per_night: currentSchedule.max_downloads_per_night,
+            throttle_seconds: currentSchedule.throttle_seconds,
+          },
+          comparison: {
+            min_savings_mb_for_nas: currentComparison.min_savings_mb_for_nas,
+          },
+          files: {
+            enable_media_probe: currentFiles.enable_media_probe,
+            nas_path_prefixes: currentFiles.nas_path_prefixes,
+          },
+        })
+      )
+
+      const next = JSON.parse(JSON.stringify(settings)) as Record<string, unknown>
+      const schedule = (next.schedule as Record<string, unknown> | undefined) ?? {}
+      const comparison = (next.comparison as Record<string, unknown> | undefined) ?? {}
+      const files = (next.files as Record<string, unknown> | undefined) ?? {}
+      const cfg = presets[preset]
+
+      schedule.min_cycle_interval_minutes = cfg.min_cycle_interval_minutes
+      schedule.max_downloads_per_night = cfg.max_downloads_per_night
+      schedule.throttle_seconds = cfg.throttle_seconds
+      comparison.min_savings_mb_for_nas = cfg.min_savings_mb_for_nas
+      files.enable_media_probe = cfg.enable_media_probe
+
+      const prefixes = (files.nas_path_prefixes as string[] | undefined) ?? []
+      if (!prefixes.length) {
+        files.nas_path_prefixes = ['Z:/']
+      }
+
+      next.schedule = schedule
+      next.comparison = comparison
+      next.files = files
+
+      await api.updateSettings(next)
+      setHasPresetSnapshot(true)
+      toast(`Applied ${preset} NAS preset`, 'success')
+      loadNasPressure()
+    } catch {
+      toast('Failed to apply NAS preset', 'error')
+    } finally {
+      setNasPresetApplying(null)
+    }
+  }
+
+  const restorePreviousNasProfile = async () => {
+    const raw = localStorage.getItem(NAS_PROFILE_SNAPSHOT_KEY)
+    if (!raw) {
+      toast('No previous NAS profile to restore', 'info')
+      return
+    }
+
+    setNasPresetApplying('restore')
+    try {
+      const snapshot = JSON.parse(raw) as {
+        schedule?: Record<string, unknown>
+        comparison?: Record<string, unknown>
+        files?: Record<string, unknown>
+      }
+
+      const settings = await api.getSettings() as Record<string, unknown>
+      const next = JSON.parse(JSON.stringify(settings)) as Record<string, unknown>
+      const schedule = (next.schedule as Record<string, unknown> | undefined) ?? {}
+      const comparison = (next.comparison as Record<string, unknown> | undefined) ?? {}
+      const files = (next.files as Record<string, unknown> | undefined) ?? {}
+
+      Object.assign(schedule, snapshot.schedule ?? {})
+      Object.assign(comparison, snapshot.comparison ?? {})
+      Object.assign(files, snapshot.files ?? {})
+
+      next.schedule = schedule
+      next.comparison = comparison
+      next.files = files
+
+      await api.updateSettings(next)
+      localStorage.removeItem(NAS_PROFILE_SNAPSHOT_KEY)
+      setHasPresetSnapshot(false)
+      toast('Restored previous NAS profile', 'success')
+      loadNasPressure()
+    } catch {
+      toast('Failed to restore previous NAS profile', 'error')
+    } finally {
+      setNasPresetApplying(null)
+    }
+  }
 
   const runPreflight = async () => {
     setPreflightLoading(true)
@@ -281,6 +414,13 @@ export default function System() {
     return 'text-rose-300'
   }, [maintenanceInsights?.maintenance_state])
 
+  const nasPressureClass = useMemo(() => {
+    const state = nasPressure?.pressure_state
+    if (state === 'low') return 'text-emerald-300'
+    if (state === 'medium') return 'text-amber-300'
+    return 'text-rose-300'
+  }, [nasPressure?.pressure_state])
+
   return (
     <div className="space-y-6 max-w-2xl">
       <h1 className="text-2xl font-bold">System</h1>
@@ -326,6 +466,76 @@ export default function System() {
             </div>
           </div>
         )}
+      </div>
+
+      <div className="rounded-2xl border border-emerald-500/25 bg-[linear-gradient(135deg,rgba(6,78,59,0.45),rgba(17,24,39,0.92),rgba(8,47,73,0.45))] p-5 shadow-[0_18px_60px_rgba(3,7,18,0.45)]">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-emerald-200/80">NAS Pressure</p>
+            <h2 className="mt-1 text-lg font-semibold text-white">Network Share Stability</h2>
+            <p className="mt-1 text-xs text-gray-300">Tracks recent NAS-targeted replacements and policy blocks, then recommends a safe profile.</p>
+          </div>
+          <button
+            onClick={loadNasPressure}
+            className="flex items-center gap-1 rounded-md border border-emerald-400/40 px-2.5 py-1 text-xs text-emerald-200 hover:bg-emerald-500/10"
+          >
+            <RefreshCw size={12} /> Refresh
+          </button>
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="rounded-xl border border-gray-700/70 bg-gray-900/55 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-400">Pressure</p>
+            <p className={`mt-1 text-xl font-semibold capitalize ${nasPressureClass}`}>{nasPressure?.pressure_state ?? 'unknown'}</p>
+          </div>
+          <div className="rounded-xl border border-gray-700/70 bg-gray-900/55 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-400">NAS Replacements (24h)</p>
+            <p className="mt-1 text-xl font-semibold text-white">{nasPressure?.recent?.replacements_24h ?? 0}</p>
+          </div>
+          <div className="rounded-xl border border-gray-700/70 bg-gray-900/55 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-400">Writes (24h)</p>
+            <p className="mt-1 text-xl font-semibold text-white">{fmtBytes(nasPressure?.recent?.replacement_bytes_24h ?? 0)}</p>
+          </div>
+          <div className="rounded-xl border border-gray-700/70 bg-gray-900/55 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-400">Policy Blocks (24h)</p>
+            <p className="mt-1 text-xl font-semibold text-white">{nasPressure?.recent?.nas_rejects_24h ?? 0}</p>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {(['gentle', 'balanced', 'aggressive'] as const).map((preset) => (
+            <button
+              key={preset}
+              onClick={() => { void applyNasPreset(preset) }}
+              disabled={!!nasPresetApplying}
+              className={`flex items-center gap-1 rounded-md border px-3 py-1.5 text-xs capitalize disabled:opacity-60 ${nasPressure?.recommended_preset === preset ? 'border-emerald-300/60 bg-emerald-300/15 text-emerald-100' : 'border-gray-600 text-gray-200 hover:bg-gray-700/50'}`}
+              title={preset === 'gentle' ? 'Best for unstable NAS links' : preset === 'balanced' ? 'Recommended default profile' : 'Higher throughput on stable NAS setups'}
+            >
+              <SlidersHorizontal size={12} />
+              {nasPresetApplying === preset ? `Applying ${preset}...` : `${preset} preset`}
+            </button>
+          ))}
+          <button
+            onClick={() => { void restorePreviousNasProfile() }}
+            disabled={!hasPresetSnapshot || !!nasPresetApplying}
+            className="flex items-center gap-1 rounded-md border border-gray-600 px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-700/50 disabled:opacity-40"
+            title="Restore schedule/NAS values from before the last preset apply"
+          >
+            <SlidersHorizontal size={12} />
+            {nasPresetApplying === 'restore' ? 'Restoring...' : 'Restore Previous'}
+          </button>
+        </div>
+
+        <div className="mt-3 rounded-lg border border-gray-700 bg-gray-900/55 p-3">
+          <p className="text-xs text-gray-300">Tracked NAS paths: {(nasPressure?.nas_prefixes?.length ?? 0) ? nasPressure?.nas_prefixes.join(', ') : 'none configured (preset will default to Z:/)'}</p>
+          <p className="mt-1 text-xs text-gray-400">NAS policy: {nasPressure?.nas_policy_enabled ? 'enabled' : 'disabled'}</p>
+          {(nasPressure?.recommendations?.length ?? 0) > 0 && (
+            <div className="mt-2 space-y-1">
+              {nasPressure?.recommendations.slice(0, 2).map((item) => (
+                <p key={item} className="text-xs text-emerald-100/90">{item}</p>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* System info */}

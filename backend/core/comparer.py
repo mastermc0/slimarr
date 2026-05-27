@@ -116,6 +116,19 @@ def _override_string_list(overrides: dict[str, Any], key: str) -> list[str]:
     return [str(item).lower().strip() for item in value if str(item).strip()]
 
 
+def _is_nas_path(path: str, configured_prefixes: list[str]) -> bool:
+    if not path:
+        return False
+    norm_path = path.replace("\\", "/").lower().rstrip("/")
+    for prefix in configured_prefixes:
+        norm_prefix = str(prefix or "").replace("\\", "/").lower().rstrip("/")
+        if not norm_prefix:
+            continue
+        if norm_path == norm_prefix or norm_path.startswith(norm_prefix + "/"):
+            return True
+    return False
+
+
 _PRIORITY_ALIASES = {
     "4k": "resolution_2160p",
     "2160p": "resolution_2160p",
@@ -178,6 +191,42 @@ def _audio_channel_value(channels: str | None) -> float:
         return float(str(channels).replace("_", "."))
     except ValueError:
         return 0.0
+
+
+def _normalize_audio_preference(value: str) -> str:
+    key = str(value or "").lower().strip().replace("_", ".")
+    aliases = {
+        "dd+": "dd5.1",
+        "ddp": "dd5.1",
+        "eac3": "dd5.1",
+        "dolby digital": "dd5.1",
+        "dolby digital plus": "dd5.1",
+        "dolby truehd": "truehd",
+    }
+    return aliases.get(key, key)
+
+
+def _audio_match_tokens(audio_codec: str | None, audio_channels: str | None) -> set[str]:
+    tokens: set[str] = set()
+    codec = _normalize_audio_preference(audio_codec or "")
+    channels = _normalize_audio_preference(audio_channels or "")
+    if codec:
+        tokens.add(codec)
+    if channels:
+        tokens.add(channels)
+
+    channel_value = _audio_channel_value(channels)
+    if channel_value >= 7.1:
+        tokens.add("7.1")
+        tokens.add("5.1")
+    elif channel_value >= 5.1:
+        tokens.add("5.1")
+
+    if codec == "atmos":
+        # Atmos releases are usually carried in a TrueHD track.
+        tokens.add("truehd")
+
+    return tokens
 
 
 def _quality_priority_bonus(parsed, cand_res_rank: int, weights: dict[str, float]) -> tuple[float, list[str]]:
@@ -257,6 +306,7 @@ def compare_release(
     force_keep: bool = False,
     allow_larger_replacements: bool = False,
     quality_profile_overrides: dict[str, Any] | None = None,
+    local_file_path: str = "",
 ) -> ComparisonResult:
     config = get_config()
     parsed = parse_release_title(candidate_title)
@@ -431,6 +481,17 @@ def compare_release(
     ):
         return _reject(f"Savings {savings_pct:.1f}% < minimum {min_savings_required:.1f}%")
 
+    # Optional NAS-specific absolute savings floor to avoid tiny churn replacements
+    # on network-mounted libraries.
+    nas_prefixes = [p for p in getattr(config.files, "nas_path_prefixes", []) if str(p or "").strip()]
+    min_savings_mb_for_nas = max(0, int(getattr(config.comparison, "min_savings_mb_for_nas", 0) or 0))
+    if min_savings_mb_for_nas > 0 and _is_nas_path(local_file_path, nas_prefixes):
+        min_savings_bytes_for_nas = min_savings_mb_for_nas * 1_048_576
+        if savings_bytes < min_savings_bytes_for_nas:
+            return _reject(
+                f"Savings {savings_bytes / 1_048_576:.0f} MB < NAS minimum {min_savings_mb_for_nas} MB"
+            )
+
     if cand_res_rank < local_res_rank:
         if not config.comparison.allow_resolution_downgrade:
             return _reject(f"Resolution downgrade {local_resolution}->{cand_res} not allowed")
@@ -490,6 +551,26 @@ def compare_release(
     preferred_sources = _override_string_list(overrides, "preferred_sources")
     if preferred_sources and (parsed.source or "").lower() in preferred_sources:
         score += 14.0
+
+    preferred_audio = [
+        _normalize_audio_preference(item)
+        for item in getattr(config.comparison, "preferred_audio_codecs", [])
+        if str(item or "").strip()
+    ]
+    if preferred_audio:
+        candidate_audio_tokens = _audio_match_tokens(parsed.audio_codec, parsed.audio_channels)
+        matched_audio = next((item for item in preferred_audio if item in candidate_audio_tokens), "")
+        require_audio_match = bool(getattr(config.comparison, "require_preferred_audio_match", False))
+        if require_audio_match and not matched_audio:
+            return _reject(
+                f"Preferred audio required ({', '.join(preferred_audio)}); candidate audio: "
+                f"{parsed.audio_codec or parsed.audio_channels or 'unknown'}"
+            )
+        if matched_audio:
+            match_rank = preferred_audio.index(matched_audio)
+            score += max(8.0, 14.0 - (match_rank * 2.0))
+        elif candidate_audio_tokens:
+            score -= 4.0
 
     if priority_bonus:
         score += priority_bonus
@@ -597,6 +678,9 @@ def compare_release(
         notes.append(f"Uploader score: {uploader_health:.2f}")
     if priority_matches:
         notes.append(f"Matched priorities: {', '.join(dict.fromkeys(priority_matches))}")
+    if preferred_audio:
+        preferred_audio_text = ", ".join(preferred_audio)
+        notes.append(f"Preferred audio order: {preferred_audio_text}")
     notes.append(f"Confidence: {confidence_score:.0f}")
 
     return ComparisonResult(

@@ -24,6 +24,7 @@ from backend.realtime.events import emit_event
 _running = False
 _stop_requested = False
 _lock = asyncio.Lock()
+_last_cycle_started_at: datetime | None = None
 
 
 def is_running() -> bool:
@@ -152,7 +153,7 @@ async def run_full_cycle() -> dict:
     """
     Full cycle: scan library → search + process movies that need improvement.
     """
-    global _running, _stop_requested
+    global _running, _stop_requested, _last_cycle_started_at
     from backend.config import get_config
 
     config = get_config()
@@ -163,6 +164,25 @@ async def run_full_cycle() -> dict:
     async with _lock:
         if _running:
             return {"status": "already_running"}
+        min_interval_minutes = max(0, int(getattr(config.schedule, "min_cycle_interval_minutes", 60) or 0))
+        now_utc = datetime.now(timezone.utc)
+        if _last_cycle_started_at and min_interval_minutes > 0:
+            elapsed_seconds = (now_utc - _last_cycle_started_at).total_seconds()
+            required_seconds = min_interval_minutes * 60
+            if elapsed_seconds < required_seconds:
+                remaining_seconds = int(required_seconds - elapsed_seconds)
+                logger.info(
+                    "Cycle skipped due cooldown: {}s remaining (min interval {}m)",
+                    remaining_seconds,
+                    min_interval_minutes,
+                )
+                return {
+                    "status": "cooldown",
+                    "remaining_seconds": remaining_seconds,
+                    "min_cycle_interval_minutes": min_interval_minutes,
+                }
+
+        _last_cycle_started_at = now_utc
         _running = True
         _stop_requested = False
     summary = {
@@ -215,9 +235,20 @@ async def run_full_cycle() -> dict:
             )
             return summary
 
+        max_downloads = max(1, int(config.schedule.max_downloads_per_night or 1))
+        throttle_seconds = max(0, int(config.schedule.throttle_seconds or 0))
+
         for movie in movies:
             if _stop_requested:
                 logger.info("Cycle stopped by request")
+                break
+
+            if summary["improved"] >= max_downloads:
+                summary["stopped_reason"] = "max_downloads_reached"
+                logger.info(
+                    "Cycle stopped: reached max_downloads_per_night ({})",
+                    max_downloads,
+                )
                 break
 
             if not is_within_schedule_window(config):
@@ -230,6 +261,12 @@ async def run_full_cycle() -> dict:
                 status = str(result.get("status") or "")
                 if status == "replaced":
                     summary["improved"] += 1
+                    if throttle_seconds > 0:
+                        logger.debug(
+                            "Post-replacement throttle: sleeping {}s before next movie",
+                            throttle_seconds,
+                        )
+                        await asyncio.sleep(throttle_seconds)
                 elif status == "no_candidates":
                     summary["no_candidates"] += 1
                 elif status in {"protected", "skipped"}:

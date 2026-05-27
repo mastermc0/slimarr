@@ -111,6 +111,7 @@ export const api = {
   servicesHealth: () => client.get('/system/health/services').then((r) => r.data),
   integrationMatrix: () => client.get('/system/integrations/matrix').then((r) => r.data),
   healthMatrix: () => client.get('/system/health/matrix').then((r) => r.data),
+  nasPressure: () => client.get('/system/nas-pressure').then((r) => r.data),
   preflight: () => client.get('/system/preflight').then((r) => r.data),
   startupContext: () => client.get('/system/startup').then((r) => r.data),
   decisionAudit: (params?: { limit?: number; decision?: 'accept' | 'reject' }) =>

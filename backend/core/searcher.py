@@ -275,6 +275,7 @@ async def search_for_movie(movie_id: int) -> list[dict]:
                     force_keep=bool(movie.force_keep),
                     allow_larger_replacements=bool(movie.allow_larger_replacements),
                     quality_profile_overrides=quality_profile_overrides,
+                    local_file_path=movie.file_path or "",
                 )
 
                 sr = SearchResult(
