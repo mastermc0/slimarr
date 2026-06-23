@@ -13,6 +13,7 @@ from sqlalchemy import select
 from backend.core.parser import normalize_codec, normalize_resolution
 from backend.core.media_probe import probe_media_file
 from backend.core.search_diagnostics import redact_text
+from backend.core.storage import path_matches_prefix
 from backend.database import ActivityLog, Movie, async_session
 from backend.realtime.events import emit_event
 
@@ -89,6 +90,11 @@ async def _run_scan() -> int:
                 existing_imdb = existing.imdb_id if existing else None
                 existing_tmdb = existing.tmdb_id if existing else None
                 existing_overview = existing.overview if existing else None
+                # Capture existing probe data so we can skip re-probing NAS files
+                existing_bitrate = existing.bitrate if existing else None
+                existing_video_codec = existing.video_codec if existing else None
+                existing_audio_codec = existing.audio_codec if existing else None
+                existing_resolution = existing.resolution if existing else None
 
             if needs_poster:
                 if config.tmdb.api_key:
@@ -142,18 +148,66 @@ async def _run_scan() -> int:
         try:
             probe: dict[str, object] = {}
             file_path = pm.get("file_path")
-            should_probe = bool(
-                config.files.enable_media_probe
-                and file_path
-                and (
-                    not pm.get("bitrate")
-                    or not pm.get("video_codec")
-                    or not pm.get("resolution")
-                    or not pm.get("audio_codec")
-                )
+            files_config = getattr(config, "files", None)
+            enable_media_probe = bool(getattr(files_config, "enable_media_probe", True))
+            nas_prefixes: list[str] = list(getattr(files_config, "nas_path_prefixes", None) or [])
+
+            # Determine whether a probe is actually needed:
+            # 1. Probe is enabled globally.
+            # 2. Neither Plex nor the existing DB record have complete metadata.
+            #    (Plex rarely returns bitrate, so we check the DB to avoid re-probing
+            #     every scan for files that have already been characterised.)
+            db_has_full_probe = bool(
+                existing_bitrate
+                and existing_video_codec
+                and existing_audio_codec
+                and existing_resolution
             )
+            plex_has_full_probe = bool(
+                pm.get("bitrate")
+                and pm.get("video_codec")
+                and pm.get("resolution")
+                and pm.get("audio_codec")
+            )
+            should_probe = bool(
+                enable_media_probe
+                and file_path
+                and not db_has_full_probe
+                and not plex_has_full_probe
+            )
+
+            # Never probe files that live on a network path unless
+            # files.nas_probe_enabled is explicitly set to true.
+            # pymediainfo reads raw bytes off the network share which causes
+            # unnecessary SMB/NFS traffic and can stall NAS storage on busy arrays.
+            # Two cases are detected:
+            #  a) Path matches a configured nas_path_prefixes entry (handles mapped
+            #     drives like Z:\ and Linux mounts like /mnt/nas).
+            #  b) Path is a UNC path (starts with \\ or //) — always network,
+            #     regardless of whether nas_path_prefixes is configured.
+            nas_probe_allowed = bool(getattr(files_config, "nas_probe_enabled", False))
+            if should_probe and not nas_probe_allowed and file_path:
+                fp_str = str(file_path)
+                fp_norm = fp_str.replace("\\", "/")
+                is_unc = fp_norm.startswith("//")
+                is_nas_prefix = bool(nas_prefixes and path_matches_prefix(fp_str, nas_prefixes))
+                if is_unc or is_nas_prefix:
+                    logger.debug("Skipping media probe for network path: {}", file_path)
+                    should_probe = False
             if should_probe:
-                probe = await asyncio.to_thread(probe_media_file, str(file_path))
+                probe_timeout = float(getattr(files_config, "media_probe_timeout_seconds", 30))
+                try:
+                    probe = await asyncio.wait_for(
+                        asyncio.to_thread(probe_media_file, str(file_path)),
+                        timeout=probe_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "media_probe timed out after {}s for {} — skipping probe",
+                        probe_timeout,
+                        file_path,
+                    )
+                    probe = {}
 
             async with async_session() as db:
                 result = await db.execute(

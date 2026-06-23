@@ -1,0 +1,6 @@
+# System tray (Windows only). Required for `python run.py --tray` / the
+# packaged Slimarr.exe tray icon, and for PyInstaller builds (see slimarr.spec
+# hidden imports: pystray, pystray._win32, PIL._tkinter_finder).
+pystray==0.19.5
+pillow==11.1.0
+pywin32==308

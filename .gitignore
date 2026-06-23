@@ -27,7 +27,11 @@ frontend/node_modules/
 
 # Logs
 *.log
+*.log.gz
+*.jsonl
 logs/
+logs-new/
+docs/logs-new/
 
 # OS
 .DS_Store

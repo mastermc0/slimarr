@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# Slimarr v1.4 — Multi-stage Dockerfile
+# Slimarr — Multi-stage Dockerfile
 # Target: linux/amd64, linux/arm64
 #
 # Stage 1  (builder)   — build the React frontend

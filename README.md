@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/react-18-61DAFB?logo=react&logoColor=black" />
   <img src="https://img.shields.io/badge/license-MIT-green" />
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20Docker%20%7C%20Windows-0ea5e9" />
-  <img src="https://img.shields.io/badge/release-1.6.1.0-success" />
+  <img src="https://img.shields.io/badge/release-1.7.0.0-success" />
 </p>
 
 <p align="center">
@@ -36,7 +36,50 @@ Scan Plex library -> Search Usenet indexers -> Compare releases
 
 Slimarr is designed to look and feel like a native member of the **\*arr ecosystem** (Radarr, Sonarr, Prowlarr). If you're familiar with those tools, you'll feel right at home.
 
-Current release: **1.6.1.0** (2026-05-27).
+Current release: **1.7.0.0** (2026-06-23).
+
+### What's New in 1.7.0.0 - Storage-Safe Automation and Persistent Jobs
+
+- **Fixed the root cause of NAS freezes/crashes during file replacement.**
+  Blocking filesystem calls (`shutil.disk_usage`, `os.makedirs`,
+  `os.path.exists`/`getsize`, directory walks) were running directly on the
+  asyncio event loop in the replace/cleanup path — on a slow or sleeping NAS
+  share, those calls could block the *entire app* for seconds at a time. All
+  blocking filesystem access in that path now runs on worker threads,
+  matching the pattern already used elsewhere in the NAS-safety code.
+- Added a shared storage-safety layer (`backend/core/storage.py`) that all
+  replacement, duplicate-cleanup, failed-download, orphan, and recycling
+  operations now route through: path classification, preflight checks,
+  per-path locks, NAS write/replacement budgets, failure cooldowns, and
+  persisted operation telemetry that survives restarts.
+- Added a persistent job runtime (durable `jobs`/`job_events` tables) so
+  scans, automation cycles, duplicate previews/cleanup, and scheduled tasks
+  survive a restart instead of losing progress as in-memory state.
+- Added replacement recovery tracking so interrupted replacements (original
+  recycled but new file not yet placed, etc.) are visible and recoverable
+  instead of silently leaving the library half-updated.
+- Added a dedicated Operations page (`/system/operations`) for active and
+  historical jobs, storage operation history, NAS budget status, and guarded
+  retry/cancel/purge actions.
+- Implemented `files.verify_after_download` (previously a no-op that warned
+  on every startup): downloads are now rejected before replacement if the
+  file is empty, with an optional media-stream check when media probing is
+  enabled.
+- Unified destructive-action confirmation across the UI (TV show delete,
+  blacklist removal, orphan cleanup, recycling purge, duplicate cleanup) on
+  one shared confirm dialog, and added consistent loading-skeleton and
+  empty-state treatment across Library, Queue, Operations, Orphaned
+  Downloads, and Blacklist.
+- Hardened error handling and SQL-identifier safety in a security/code-health
+  pass; see `CHANGELOG.md` for the full list.
+- Updated `docs/DOCKER.md` with the full NAS-safety environment variable set
+  and new Prometheus metrics, which were previously undocumented even though
+  `.env.example` and the Compose templates already supported them.
+
+Deeper visual redesign of Dashboard/Library/Movie Detail/Settings and new
+release artwork are still in progress and will land in a follow-up release —
+see `docs/VERSION_1_7_ROADMAP.md` for status. Full standalone release notes:
+`docs/CHANGELOG_v1.7.0.0.md`.
 
 ### What's New in 1.6.1.0 - NAS Resilience and UI Polish
 
@@ -200,11 +243,11 @@ docker compose -f docker-compose.postgres.yml up -d
 
 ### Option B - Windows installer
 
-Download `SlimarrSetup-1.6.1.0.exe` (or the latest `SlimarrSetup-*.exe`) from the [Releases](https://github.com/theantipopau/slimarr/releases) page and run it. The installer bundles Python and all dependencies - no manual setup required. After install, Slimarr appears in the Start Menu and optionally the system tray on login.
+Download `SlimarrSetup-1.7.0.0.exe` (or the latest `SlimarrSetup-*.exe`) from the [Releases](https://github.com/theantipopau/slimarr/releases) page and run it. The installer bundles Python and all dependencies - no manual setup required. After install, Slimarr appears in the Start Menu and optionally the system tray on login.
 
 At the end of setup, the installer shows `Start Slimarr now` (checked by default). If selected, Slimarr starts minimized with the tray icon available and your browser opens automatically to `http://localhost:9494` when the backend is ready.
 
-`1.6.1.0` is the current release target. Newer `main` branch changes may land before the next installer is cut; if you want those immediately, run Slimarr from source or Docker.
+`1.7.0.0` is the current release target. Newer `main` branch changes may land before the next installer is cut; if you want those immediately, run Slimarr from source or Docker.
 
 ### Option C - From source
 
@@ -394,6 +437,15 @@ files:
   recycling_bin: ""              # Leave empty to delete originals immediately (recommended).
                                  # Set a path (e.g. D:/recycle) to keep copies temporarily.
   recycling_bin_cleanup_days: 30 # Auto-delete recycled files older than this many days
+  enable_media_probe: false
+  nas_path_prefixes:
+    - "Z:/Movies"
+  nas_max_write_gb_per_day: 150
+  nas_max_replacements_per_day: 3
+  nas_max_concurrent_operations: 1
+  nas_failure_cooldown_minutes: 15
+  nas_max_transfer_mbps: 50
+  nas_copy_chunk_mb: 8
 
   # Path mappings: use when Plex reports file paths that Slimarr can't
   # access directly (different machine, different drive letter/mount point).
@@ -413,6 +465,16 @@ schedule:
 ```
 
 > **Note on disk space:** By default `recycling_bin` is empty, meaning old files are deleted immediately when a replacement succeeds. If you configure a recycling bin path, be aware that replaced movie files (typically 10-50 GB each) accumulate there until the nightly cleanup runs. Use a path on a drive with plenty of headroom, or leave the setting empty.
+
+---
+
+### NAS-safe deployment
+
+Keep Slimarr's database, logs, configuration, and image cache on local storage. Mount only the media library from the NAS. SQLite performs many small transactional writes and should not be placed on SMB or NFS storage.
+
+List every real NAS root in NAS Movie Path Prefixes. Do not use a placeholder drive: an incorrect prefix causes mapped network drives to be treated as local. UNC paths are detected automatically, but listing them explicitly keeps policy reporting clear.
+
+Cross-device file replacements that touch a configured NAS are copied in chunks to a temporary target and paced by the NAS transfer limit. The temporary file is renamed only after the copy succeeds. Same-volume moves remain fast metadata-only renames.
 
 ---
 

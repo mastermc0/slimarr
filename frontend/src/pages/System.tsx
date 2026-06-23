@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '@/lib/api'
+import { NAS_PRESETS, type NasPresetName } from '@/lib/nasPresets'
 import { useSocket } from '@/hooks/useSocket'
 import { useToast } from '@/components/Toast'
-import type { DecisionAuditEntry, DuplicateCleanupPreview, HealthMatrix, NasPressure, PreflightResult, UtilitiesMaintenanceInsights } from '@/lib/types'
+import type { DecisionAuditEntry, DuplicateCleanupPreview, HealthMatrix, NasPressure, PersistentJobsSnapshot, PreflightResult, ReplacementRecoverySnapshot, StorageOperationsSnapshot, StoragePreflight, UtilitiesMaintenanceInsights } from '@/lib/types'
 import { Play, Square, RefreshCw, Database, Clock, Server, CheckCircle, XCircle, Trash2, ArrowUpCircle, ShieldCheck, Sparkles, GaugeCircle, HardDrive, ShieldAlert, SlidersHorizontal } from 'lucide-react'
+import ConfirmDialog from '@/components/ConfirmDialog'
+import StorageStateMark from '@/components/StorageStateMark'
 
 interface ServiceHealth {
   success: boolean
@@ -80,14 +84,26 @@ export default function System() {
   const [nasPressure, setNasPressure] = useState<NasPressure | null>(null)
   const [nasPresetApplying, setNasPresetApplying] = useState<string | null>(null)
   const [hasPresetSnapshot, setHasPresetSnapshot] = useState(false)
+  const [storageGuard, setStorageGuard] = useState<StoragePreflight | null>(null)
+  const [storageGuardLoading, setStorageGuardLoading] = useState(false)
+  const [storageOperations, setStorageOperations] = useState<StorageOperationsSnapshot | null>(null)
+  const [replacementRecovery, setReplacementRecovery] = useState<ReplacementRecoverySnapshot | null>(null)
+  const [persistentJobs, setPersistentJobs] = useState<PersistentJobsSnapshot | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    title: string
+    message: string
+    confirmLabel?: string
+    onConfirm: () => void
+  }>({ open: false, title: '', message: '', onConfirm: () => {} })
 
   const loadStatus = () => api.systemStatus().then(setStatus).catch(() => {})
   const loadServices = () => api.servicesHealth().then(setServices).catch(() => {})
   const loadHealthMatrix = () => api.healthMatrix().then(setHealthMatrix).catch(() => {})
   const loadDecisionAudit = () => api.decisionAudit({ limit: 8 }).then((rows) => setDecisionAudit(rows as DecisionAuditEntry[])).catch(() => {})
-  const loadCleanupPreview = (showLoading = false) => {
+  const loadCleanupPreview = (showLoading = false, force = false) => {
     if (showLoading) setCleanupPreviewLoading(true)
-    return api.cleanupPreview()
+    return api.cleanupPreview({ force })
       .then((data) => setCleanupPreview(data as DuplicateCleanupPreview))
       .catch(() => {})
       .finally(() => {
@@ -96,6 +112,9 @@ export default function System() {
   }
   const loadMaintenanceInsights = () => api.utilitiesMaintenanceInsights().then((data) => setMaintenanceInsights(data as UtilitiesMaintenanceInsights)).catch(() => {})
   const loadNasPressure = () => api.nasPressure().then((data) => setNasPressure(data as NasPressure)).catch(() => {})
+  const loadStorageOperations = () => api.storageOperations({ limit: 8 }).then((data) => setStorageOperations(data as StorageOperationsSnapshot)).catch(() => {})
+  const loadReplacementRecovery = () => api.replacementRecovery({ status: 'active', limit: 8 }).then((data) => setReplacementRecovery(data as ReplacementRecoverySnapshot)).catch(() => {})
+  const loadPersistentJobs = () => api.jobs({ status: 'all', limit: 8 }).then((data) => setPersistentJobs(data as PersistentJobsSnapshot)).catch(() => {})
   const loadRecyclingInfo = (showLoading = false) => {
     if (showLoading) setRecyclingLoading(true)
     return api.recyclingBinInfo()
@@ -111,12 +130,14 @@ export default function System() {
     api.systemInfo().then(setInfo).catch(() => {})
     api.stats().then((d) => setQuickStats(d as { active_downloads?: number; total_movies?: number; improved?: number })).catch(() => {})
     api.updateCheck().then(setUpdateInfo).catch(() => {})
-    loadServices()
-    loadHealthMatrix()
+    loadServices().finally(loadHealthMatrix)
     loadDecisionAudit()
     void loadCleanupPreview(true)
     loadMaintenanceInsights()
     loadNasPressure()
+    loadStorageOperations()
+    loadReplacementRecovery()
+    loadPersistentJobs()
     void loadRecyclingInfo(true)
     const iv = setInterval(loadStatus, 10000)
     const recycleIv = setInterval(() => {
@@ -124,27 +145,33 @@ export default function System() {
         void loadRecyclingInfo()
       }
     }, 60000)
-    const servicesIv = setInterval(() => {
+    const healthIv = setInterval(() => {
       if (!document.hidden) {
-        loadServices()
         loadHealthMatrix()
         loadDecisionAudit()
-        loadMaintenanceInsights()
-        loadNasPressure()
+        loadStorageOperations()
+        loadReplacementRecovery()
+        loadPersistentJobs()
       }
     }, 30000)
-    const previewIv = setInterval(() => {
-      if (!document.hidden && !cleaning) {
-        void loadCleanupPreview()
-      }
-    }, 45000)
+    const nasIv = setInterval(() => {
+      if (!document.hidden) loadNasPressure()
+    }, 60000)
+    const servicesIv = setInterval(() => {
+      if (!document.hidden) loadServices()
+    }, 120000)
+    const maintenanceIv = setInterval(() => {
+      if (!document.hidden) loadMaintenanceInsights()
+    }, 300000)
     return () => {
       clearInterval(iv)
       clearInterval(recycleIv)
+      clearInterval(healthIv)
+      clearInterval(nasIv)
       clearInterval(servicesIv)
-      clearInterval(previewIv)
+      clearInterval(maintenanceIv)
     }
-  }, [cleaning])
+  }, [])
 
   useEffect(() => {
     setHasPresetSnapshot(localStorage.getItem(NAS_PROFILE_SNAPSHOT_KEY) !== null)
@@ -160,32 +187,8 @@ export default function System() {
 
   const { toast } = useToast()
 
-  const applyNasPreset = async (preset: 'gentle' | 'balanced' | 'aggressive') => {
+  const applyNasPreset = async (preset: NasPresetName) => {
     setNasPresetApplying(preset)
-    const presets: Record<string, { min_cycle_interval_minutes: number; max_downloads_per_night: number; throttle_seconds: number; min_savings_mb_for_nas: number; enable_media_probe: boolean }> = {
-      gentle: {
-        min_cycle_interval_minutes: 240,
-        max_downloads_per_night: 2,
-        throttle_seconds: 90,
-        min_savings_mb_for_nas: 700,
-        enable_media_probe: false,
-      },
-      balanced: {
-        min_cycle_interval_minutes: 180,
-        max_downloads_per_night: 3,
-        throttle_seconds: 60,
-        min_savings_mb_for_nas: 500,
-        enable_media_probe: false,
-      },
-      aggressive: {
-        min_cycle_interval_minutes: 120,
-        max_downloads_per_night: 5,
-        throttle_seconds: 30,
-        min_savings_mb_for_nas: 250,
-        enable_media_probe: true,
-      },
-    }
-
     try {
       const settings = await api.getSettings() as Record<string, unknown>
       const currentSchedule = (settings.schedule as Record<string, unknown> | undefined) ?? {}
@@ -205,6 +208,9 @@ export default function System() {
           files: {
             enable_media_probe: currentFiles.enable_media_probe,
             nas_path_prefixes: currentFiles.nas_path_prefixes,
+            nas_max_write_gb_per_day: currentFiles.nas_max_write_gb_per_day,
+            nas_max_replacements_per_day: currentFiles.nas_max_replacements_per_day,
+            nas_max_transfer_mbps: currentFiles.nas_max_transfer_mbps,
           },
         })
       )
@@ -213,18 +219,18 @@ export default function System() {
       const schedule = (next.schedule as Record<string, unknown> | undefined) ?? {}
       const comparison = (next.comparison as Record<string, unknown> | undefined) ?? {}
       const files = (next.files as Record<string, unknown> | undefined) ?? {}
-      const cfg = presets[preset]
+      const cfg = NAS_PRESETS[preset]
 
       schedule.min_cycle_interval_minutes = cfg.min_cycle_interval_minutes
       schedule.max_downloads_per_night = cfg.max_downloads_per_night
       schedule.throttle_seconds = cfg.throttle_seconds
       comparison.min_savings_mb_for_nas = cfg.min_savings_mb_for_nas
       files.enable_media_probe = cfg.enable_media_probe
+      files.nas_max_write_gb_per_day = cfg.nas_max_write_gb_per_day
+      files.nas_max_replacements_per_day = cfg.nas_max_replacements_per_day
+      files.nas_max_transfer_mbps = cfg.nas_max_transfer_mbps
 
       const prefixes = (files.nas_path_prefixes as string[] | undefined) ?? []
-      if (!prefixes.length) {
-        files.nas_path_prefixes = ['Z:/']
-      }
 
       next.schedule = schedule
       next.comparison = comparison
@@ -234,6 +240,9 @@ export default function System() {
       setHasPresetSnapshot(true)
       toast(`Applied ${preset} NAS preset`, 'success')
       loadNasPressure()
+      if (!prefixes.length) {
+        toast('Add your real NAS path in Settings to activate these limits', 'info')
+      }
     } catch {
       toast('Failed to apply NAS preset', 'error')
     } finally {
@@ -341,49 +350,74 @@ export default function System() {
   }
 
   const cleanDuplicates = async () => {
-    setCleaning(true)
-    try {
-      const previewState = cleanupPreview ?? await api.cleanupPreview() as DuplicateCleanupPreview
-      const reclaimable = previewState?.estimated_reclaimable_bytes ?? 0
-      const duplicates = previewState?.duplicates_found ?? 0
-      const confirmed = window.confirm(
-        `Start duplicate cleanup?\n\nPotential duplicates: ${duplicates}\nEstimated reclaimable: ${fmtBytes(reclaimable)}\n\nThis operation may move files to your recycling folder (if configured) or delete them permanently.`
-      )
-      if (!confirmed) {
-        setCleaning(false)
-        return
-      }
-      const result = await api.cleanupDuplicates(true) as { status?: string }
-      if (result?.status === 'confirmation_required') {
-        toast('Cleanup requires explicit confirmation', 'error')
-      } else {
-        toast('Duplicate cleanup started — check logs for detailed progress', 'info')
-      }
-      void loadCleanupPreview()
-      loadMaintenanceInsights()
-    } catch { toast('Failed to start duplicate scan', 'error') }
-    setTimeout(() => setCleaning(false), 8000)
+    const previewState = cleanupPreview ?? await api.cleanupPreview() as DuplicateCleanupPreview
+    const reclaimable = previewState?.estimated_reclaimable_bytes ?? 0
+    const duplicates = previewState?.duplicates_found ?? 0
+    setConfirmDialog({
+      open: true,
+      title: 'Start duplicate cleanup?',
+      message: `Found ${duplicates} potential duplicate(s), estimated ${fmtBytes(reclaimable)} reclaimable. Files may be moved to your recycling folder (if configured) or deleted permanently.`,
+      confirmLabel: 'Start Cleanup',
+      onConfirm: async () => {
+        setConfirmDialog((d) => ({ ...d, open: false }))
+        setCleaning(true)
+        try {
+          const result = await api.cleanupDuplicates(true) as { status?: string }
+          if (result?.status === 'confirmation_required') {
+            toast('Cleanup requires explicit confirmation', 'error')
+          } else {
+            toast('Duplicate cleanup started — check logs for detailed progress', 'info')
+          }
+          void loadCleanupPreview(true, true)
+          loadMaintenanceInsights()
+        } catch { toast('Failed to start duplicate scan', 'error') }
+        setTimeout(() => setCleaning(false), 8000)
+      },
+    })
   }
 
-  const purgeRecyclingBin = async () => {
+  const purgeRecyclingBin = () => {
     const path = recyclingInfo?.path
     if (!recyclingInfo?.enabled || !recyclingInfo?.exists || !path) {
       toast('Recycling bin is not configured', 'error')
       return
     }
-    const confirmed = window.confirm(`Permanently delete everything in the recycling folder?\n\n${path}`)
-    if (!confirmed) return
+    setConfirmDialog({
+      open: true,
+      title: 'Purge recycling folder?',
+      message: `Permanently delete all ${recyclingInfo.files} file(s) in the recycling folder (${fmtBytes(recyclingInfo.bytes)}). This cannot be undone.`,
+      confirmLabel: 'Purge',
+      onConfirm: async () => {
+        setConfirmDialog((d) => ({ ...d, open: false }))
+        setRecyclingPurging(true)
+        try {
+          const result = await api.emptyRecyclingBin()
+          const freed = Number((result as Record<string, unknown>)?.freed_bytes ?? 0)
+          toast(`Recycling folder purged (${fmtBytes(freed)} freed)`, 'success')
+          await loadRecyclingInfo(true)
+        } catch {
+          toast('Failed to purge recycling folder', 'error')
+        } finally {
+          setRecyclingPurging(false)
+        }
+      },
+    })
+  }
 
-    setRecyclingPurging(true)
+  const runStorageGuardCheck = async () => {
+    const path = recyclingInfo?.path || nasPressure?.nas_prefixes?.[0] || 'data'
+    setStorageGuardLoading(true)
     try {
-      const result = await api.emptyRecyclingBin()
-      const freed = Number((result as Record<string, unknown>)?.freed_bytes ?? 0)
-      toast(`Recycling folder purged (${fmtBytes(freed)} freed)`, 'success')
-      await loadRecyclingInfo(true)
+      const result = await api.storagePreflight({
+        path,
+        purpose: 'system_storage_guard',
+      }) as StoragePreflight
+      setStorageGuard(result)
+      toast(`Storage preflight: ${result.status}`, result.status === 'block' ? 'error' : result.status === 'warn' ? 'info' : 'success')
     } catch {
-      toast('Failed to purge recycling folder', 'error')
+      toast('Storage preflight failed', 'error')
     } finally {
-      setRecyclingPurging(false)
+      setStorageGuardLoading(false)
     }
   }
 
@@ -421,9 +455,45 @@ export default function System() {
     return 'text-rose-300'
   }, [nasPressure?.pressure_state])
 
+  const storageGuardState = storageGuard?.status ?? 'ready'
+  const storageGuardClass = storageGuardState === 'ok'
+    ? 'text-emerald-300'
+    : storageGuardState === 'warn'
+      ? 'text-amber-300'
+      : storageGuardState === 'block'
+        ? 'text-rose-300'
+        : 'text-cyan-200'
+  const nasPolicy = storageOperations?.nas_policy
+  const recentStorageFailures = storageOperations?.recent_failures ?? []
+  const storageCompleted = (storageOperations?.counters['move:completed'] ?? 0) + (storageOperations?.counters['remove:completed'] ?? 0)
+  const storageFailed = (storageOperations?.counters['move:failed'] ?? 0) + (storageOperations?.counters['remove:failed'] ?? 0)
+  const storageCooldownClass = nasPolicy?.cooldown_active ? 'text-amber-300' : 'text-emerald-300'
+  const persistedStorage = storageOperations?.persisted
+  const recoveryRecords = replacementRecovery?.records ?? []
+  const recoveryRequired = recoveryRecords.filter((record) => record.status === 'recovery_required').length
+  const runningRecovery = recoveryRecords.filter((record) => record.status === 'running').length
+  const recoveryState = replacementRecovery?.status ?? 'clear'
+  const recoveryClass = recoveryState === 'clear'
+    ? 'text-emerald-300'
+    : recoveryState === 'recovery_required'
+      ? 'text-rose-300'
+      : 'text-amber-300'
+  const latestRecoveryRecord = recoveryRecords[0]
+  const jobRows = persistentJobs?.jobs ?? []
+  const activeJobCount = jobRows.filter((job) => ['queued', 'running', 'cancelling'].includes(job.status)).length
+  const failedJobCount = jobRows.filter((job) => ['failed', 'recovery_required'].includes(job.status)).length
+  const latestJob = jobRows[0]
+  const jobStateClass = failedJobCount > 0 ? 'text-rose-300' : activeJobCount > 0 ? 'text-amber-300' : 'text-emerald-300'
+
   return (
-    <div className="space-y-6 max-w-2xl">
-      <h1 className="text-2xl font-bold">System</h1>
+    <div className="space-y-6 max-w-5xl">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/75">v1.7 operations center</p>
+          <h1 className="text-2xl font-bold">System</h1>
+        </div>
+        <p className="text-xs text-gray-400">Storage-safe automation, maintenance health, and recovery signals</p>
+      </div>
 
       <div className="rounded-2xl border border-cyan-500/30 bg-[linear-gradient(135deg,rgba(8,47,73,0.7),rgba(17,24,39,0.92),rgba(67,20,7,0.4))] p-5 shadow-[0_18px_60px_rgba(3,7,18,0.45)]">
         <div className="flex items-start justify-between gap-3">
@@ -526,7 +596,7 @@ export default function System() {
         </div>
 
         <div className="mt-3 rounded-lg border border-gray-700 bg-gray-900/55 p-3">
-          <p className="text-xs text-gray-300">Tracked NAS paths: {(nasPressure?.nas_prefixes?.length ?? 0) ? nasPressure?.nas_prefixes.join(', ') : 'none configured (preset will default to Z:/)'}</p>
+          <p className="text-xs text-gray-300">Tracked NAS paths: {(nasPressure?.nas_prefixes?.length ?? 0) ? nasPressure?.nas_prefixes.join(', ') : 'none configured; add the real path in Settings'}</p>
           <p className="mt-1 text-xs text-gray-400">NAS policy: {nasPressure?.nas_policy_enabled ? 'enabled' : 'disabled'}</p>
           {(nasPressure?.recommendations?.length ?? 0) > 0 && (
             <div className="mt-2 space-y-1">
@@ -534,6 +604,254 @@ export default function System() {
                 <p key={item} className="text-xs text-emerald-100/90">{item}</p>
               ))}
             </div>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-cyan-400/25 bg-gray-950/70 p-5 shadow-[0_18px_60px_rgba(3,7,18,0.42)]">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-cyan-200/80">Storage Safety</p>
+            <h2 className="mt-1 text-lg font-semibold text-white">Guarded File Operations</h2>
+            <p className="mt-1 max-w-2xl text-xs text-gray-300">
+              Replacement, duplicate cleanup, orphan cleanup, failed-download cleanup, and recycle purges now route through locked storage operations.
+            </p>
+          </div>
+          <button
+            onClick={() => { void runStorageGuardCheck() }}
+            disabled={storageGuardLoading}
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-cyan-300/40 px-3 py-1.5 text-xs text-cyan-100 hover:bg-cyan-400/10 disabled:opacity-50"
+          >
+            <ShieldCheck size={14} className={storageGuardLoading ? 'animate-pulse' : ''} />
+            {storageGuardLoading ? 'Checking' : 'Check Path'}
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500">Preflight</p>
+            <p className={`mt-1 text-lg font-semibold ${storageGuardClass}`}>{storageGuardState}</p>
+            <p className="mt-1 text-[11px] text-gray-500">path, parent, free space</p>
+          </div>
+          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500">Path Class</p>
+            <p className="mt-1 text-lg font-semibold text-white">{storageGuard?.classification ?? (nasPressure?.nas_policy_enabled ? 'nas-aware' : 'local')}</p>
+            <p className="mt-1 truncate text-[11px] text-gray-500">{storageGuard?.matched_prefix ?? nasPressure?.nas_prefixes?.[0] ?? 'no prefix selected'}</p>
+          </div>
+          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500">Operation Locks</p>
+            <p className={`mt-1 text-lg font-semibold ${storageFailed > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>
+              {storageCompleted}
+            </p>
+            <p className="mt-1 text-[11px] text-gray-500">{storageFailed} failed operations</p>
+          </div>
+          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500">NAS Cooldown</p>
+            <p className={`mt-1 text-lg font-semibold ${storageCooldownClass}`}>
+              {nasPolicy?.cooldown_active ? `${nasPolicy.cooldown_remaining_seconds}s` : 'clear'}
+            </p>
+            <p className="mt-1 text-[11px] text-gray-500">{nasPolicy?.active_operations ?? 0} active NAS ops</p>
+          </div>
+        </div>
+
+        {storageGuard && (
+          <div className="mt-4 rounded-lg border border-gray-800 bg-gray-900/60 p-3">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <p className="break-all text-xs text-gray-300">{storageGuard.path}</p>
+              <p className="text-xs text-gray-500">{storageGuard.free_bytes != null ? `${fmtBytes(storageGuard.free_bytes)} free` : 'free space unknown'}</p>
+            </div>
+            {storageGuard.messages.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {storageGuard.messages.slice(0, 4).map((message) => (
+                  <span key={message} className="rounded-full border border-gray-700 bg-gray-950/70 px-2 py-1 text-[11px] text-gray-300">{message}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {storageOperations && (
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-gray-500">24h NAS Writes</p>
+              <p className="mt-1 text-base font-semibold text-white">{fmtBytes(nasPolicy?.write_bytes_used_24h ?? 0)}</p>
+              <p className="mt-1 text-[11px] text-gray-500">{nasPolicy?.replacements_24h ?? 0} replacements counted</p>
+            </div>
+            <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-gray-500">Recent History</p>
+              <p className="mt-1 text-base font-semibold text-white">{storageOperations.history_size}</p>
+              <p className="mt-1 text-[11px] text-gray-500">
+                {persistedStorage?.available ? `${persistedStorage.history_size} persisted records` : 'in-memory operation records'}
+              </p>
+            </div>
+            <button
+              onClick={loadStorageOperations}
+              className="flex min-h-[82px] items-center justify-center gap-2 rounded-lg border border-gray-800 bg-gray-900/60 p-3 text-xs text-cyan-100 hover:bg-cyan-400/10"
+            >
+              <RefreshCw size={14} />
+              Refresh storage state
+            </button>
+          </div>
+        )}
+
+        {recentStorageFailures.length > 0 && (
+          <div className="mt-4 rounded-lg border border-amber-400/30 bg-amber-950/20 p-3">
+            <p className="text-xs font-medium text-amber-100">
+              Storage failures in the last {Math.max(1, Math.round((storageOperations?.recent_failure_window_seconds ?? 3600) / 60))} minutes
+            </p>
+            <div className="mt-2 space-y-2">
+              {recentStorageFailures.slice(0, 3).map((item) => (
+                <div key={`${item.operation}-${item.started_at}-${item.source_path}`} className="flex flex-col gap-1 border-t border-amber-400/10 pt-2 first:border-t-0 first:pt-0">
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-amber-100/90">
+                    <span className="rounded-full border border-amber-300/30 px-2 py-0.5">{item.operation}</span>
+                    <span>{item.purpose}</span>
+                    <span className="text-amber-200/60">{item.source_classification}</span>
+                  </div>
+                  <p className="break-all text-[11px] text-gray-300">{item.error || item.source_path}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-2xl border border-amber-400/25 bg-gray-950/70 p-5 shadow-[0_18px_60px_rgba(3,7,18,0.38)]">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-amber-200/80">Replacement Recovery</p>
+            <h2 className="mt-1 text-lg font-semibold text-white">Interrupted Operation Watch</h2>
+            <p className="mt-1 max-w-2xl text-xs text-gray-300">
+              Tracks risky replacement phases that moved originals, staged backups, or still need operator review after an interruption.
+            </p>
+          </div>
+          <button
+            onClick={loadReplacementRecovery}
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-amber-300/40 px-3 py-1.5 text-xs text-amber-100 hover:bg-amber-400/10"
+          >
+            <RefreshCw size={14} />
+            Refresh recovery
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500">State</p>
+            <p className={`mt-1 text-lg font-semibold capitalize ${recoveryClass}`}>{recoveryState.replace(/_/g, ' ')}</p>
+            <p className="mt-1 text-[11px] text-gray-500">{recoveryRecords.length} active record(s)</p>
+          </div>
+          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500">Needs Review</p>
+            <p className={`mt-1 text-lg font-semibold ${recoveryRequired > 0 ? 'text-rose-300' : 'text-emerald-300'}`}>{recoveryRequired}</p>
+            <p className="mt-1 text-[11px] text-gray-500">recovery-required replacements</p>
+          </div>
+          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500">Running</p>
+            <p className={`mt-1 text-lg font-semibold ${runningRecovery > 0 ? 'text-amber-300' : 'text-gray-300'}`}>{runningRecovery}</p>
+            <p className="mt-1 text-[11px] text-gray-500">filesystem phases tracked</p>
+          </div>
+          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500">Latest Phase</p>
+            <div className="mt-1 truncate text-lg font-semibold">
+              <StorageStateMark phase={latestRecoveryRecord?.phase} />
+            </div>
+            <p className="mt-1 truncate text-[11px] text-gray-500">{latestRecoveryRecord?.movie_title ?? 'no active replacement'}</p>
+          </div>
+        </div>
+
+        {latestRecoveryRecord && (
+          <div className={`mt-4 rounded-lg border p-3 ${latestRecoveryRecord.status === 'recovery_required' ? 'border-rose-400/30 bg-rose-950/20' : 'border-amber-400/25 bg-amber-950/15'}`}>
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-white">{latestRecoveryRecord.movie_title ?? `Replacement #${latestRecoveryRecord.id}`}</p>
+                <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
+                  <StorageStateMark phase={latestRecoveryRecord.phase} />
+                  {latestRecoveryRecord.updated_at ? <span>updated {new Date(latestRecoveryRecord.updated_at).toLocaleString()}</span> : null}
+                </p>
+              </div>
+              <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${latestRecoveryRecord.status === 'recovery_required' ? 'border-rose-300/40 text-rose-100' : 'border-amber-300/40 text-amber-100'}`}>
+                {latestRecoveryRecord.status.replace(/_/g, ' ')}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2 text-[11px] text-gray-300 sm:grid-cols-2">
+              <p className="break-all"><span className="text-gray-500">target:</span> {latestRecoveryRecord.target_path ?? latestRecoveryRecord.mapped_path ?? 'unknown'}</p>
+              <p className="break-all"><span className="text-gray-500">backup:</span> {latestRecoveryRecord.recycle_path ?? latestRecoveryRecord.fallback_backup_path ?? 'none recorded'}</p>
+            </div>
+            {latestRecoveryRecord.error_message && (
+              <p className="mt-2 break-words text-xs text-rose-200">{latestRecoveryRecord.error_message}</p>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-2xl border border-sky-400/25 bg-gray-950/70 p-5 shadow-[0_18px_60px_rgba(3,7,18,0.36)]">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-sky-200/80">Persistent Jobs</p>
+            <h2 className="mt-1 text-lg font-semibold text-white">Work Timeline</h2>
+            <p className="mt-1 max-w-2xl text-xs text-gray-300">
+              Manual scans, automation cycles, duplicate previews, cleanup runs, and scheduler actions now write durable job records.
+            </p>
+          </div>
+          <button
+            onClick={loadPersistentJobs}
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-sky-300/40 px-3 py-1.5 text-xs text-sky-100 hover:bg-sky-400/10"
+          >
+            <RefreshCw size={14} />
+            Refresh jobs
+          </button>
+          <Link
+            to="/system/operations"
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600"
+          >
+            View all →
+          </Link>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500">Recent Jobs</p>
+            <p className="mt-1 text-lg font-semibold text-white">{jobRows.length}</p>
+            <p className="mt-1 text-[11px] text-gray-500">latest persisted records</p>
+          </div>
+          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500">Active</p>
+            <p className={`mt-1 text-lg font-semibold ${activeJobCount > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>{activeJobCount}</p>
+            <p className="mt-1 text-[11px] text-gray-500">queued/running/cancelling</p>
+          </div>
+          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500">Attention</p>
+            <p className={`mt-1 text-lg font-semibold ${failedJobCount > 0 ? 'text-rose-300' : 'text-emerald-300'}`}>{failedJobCount}</p>
+            <p className="mt-1 text-[11px] text-gray-500">failed or recovery-required</p>
+          </div>
+          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500">Latest</p>
+            <p className={`mt-1 truncate text-lg font-semibold capitalize ${jobStateClass}`}>{latestJob?.status?.replace(/_/g, ' ') ?? 'none'}</p>
+            <p className="mt-1 truncate text-[11px] text-gray-500">{latestJob?.kind?.replace(/_/g, ' ') ?? 'no job history'}</p>
+          </div>
+        </div>
+
+        <div className="mt-4 divide-y divide-gray-800 overflow-hidden rounded-lg border border-gray-800 bg-gray-900/55">
+          {jobRows.length === 0 ? (
+            <p className="px-3 py-4 text-sm text-gray-500">No persistent job history yet.</p>
+          ) : (
+            jobRows.slice(0, 5).map((job) => (
+              <div key={job.id} className="px-3 py-2.5 text-xs">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="font-medium text-gray-100">{job.kind.replace(/_/g, ' ')}</p>
+                    <p className="mt-0.5 truncate text-gray-500">{job.id}</p>
+                  </div>
+                  <span className={`shrink-0 rounded-full border px-2 py-0.5 capitalize ${['failed', 'recovery_required'].includes(job.status) ? 'border-rose-300/40 text-rose-100' : ['queued', 'running', 'cancelling'].includes(job.status) ? 'border-amber-300/40 text-amber-100' : 'border-emerald-300/40 text-emerald-100'}`}>
+                    {job.status.replace(/_/g, ' ')}
+                  </span>
+                </div>
+                <p className="mt-1 text-gray-500">
+                  attempt {job.attempt}/{job.max_attempts}
+                  {job.created_at ? ` / queued ${new Date(job.created_at).toLocaleString()}` : ''}
+                  {job.error_message ? ` / ${job.error_message}` : ''}
+                </p>
+              </div>
+            ))
           )}
         </div>
       </div>
@@ -805,7 +1123,7 @@ export default function System() {
         </div>
         <div className="flex gap-2 w-full sm:w-auto">
           <button
-            onClick={() => { void loadCleanupPreview(true) }}
+            onClick={() => { void loadCleanupPreview(true, true) }}
             disabled={cleanupPreviewLoading || cleaning}
             className="flex flex-1 items-center justify-center gap-2 px-3 py-1.5 rounded bg-gray-700 text-sm hover:bg-gray-600 disabled:opacity-50 sm:flex-none"
           >
@@ -925,6 +1243,18 @@ export default function System() {
           ))}
         </div>
       </div>
+
+      {/* Confirm dialog for destructive actions */}
+      <ConfirmDialog
+        open={confirmDialog.open}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmLabel={confirmDialog.confirmLabel ?? 'Confirm'}
+        destructive
+        loading={recyclingPurging || cleaning}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog((d) => ({ ...d, open: false }))}
+      />
     </div>
   )
 }

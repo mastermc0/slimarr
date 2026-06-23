@@ -1,8 +1,8 @@
 ﻿# build-installer.ps1 - Build the Slimarr Windows installer
-# Output: dist/installer/SlimarrSetup-1.6.1.0.exe
+# Output: dist/installer/SlimarrSetup-1.7.0.0.exe
 #
 # Prerequisites (install once):
-#   pip install pyinstaller          (in your venv)
+#   pip install pyinstaller -r requirements-tray.txt   (in your venv)
 #   winget install JRSoftware.InnoSetup   (or https://jrsoftware.org/isdl.php)
 #
 # Usage:
@@ -115,7 +115,7 @@ exit /b 0
 
 Write-Host ""
 Write-Host "  +-------------------------------------+" -ForegroundColor Green
-Write-Host "  |  Slimarr Installer Builder v1.6.1  |" -ForegroundColor Green
+Write-Host "  |  Slimarr Installer Builder v1.7.0  |" -ForegroundColor Green
 Write-Host "  +-------------------------------------+" -ForegroundColor Green
 
 # ---- 0. Sanity checks -------------------------------------------------------
@@ -135,6 +135,8 @@ Write-Ok "PyInstaller: found"
 $ISSPaths = @(
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
     "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+    "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
+    "${env:ProgramFiles}\Inno Setup 7\ISCC.exe",
     "ISCC.exe"
 )
 $ISCC = $null
@@ -143,7 +145,7 @@ foreach ($p in $ISSPaths) {
     try { if (Get-Command $p -ErrorAction Stop) { $ISCC = $p; break } } catch {}
 }
 if (-not $ISCC) {
-    Write-Err "Inno Setup 6 not found. Install from: https://jrsoftware.org/isdl.php or run: winget install JRSoftware.InnoSetup"
+    Write-Err "Inno Setup 6 or 7 not found. Install from: https://jrsoftware.org/isdl.php or run: winget install JRSoftware.InnoSetup"
 }
 Write-Ok "Inno Setup: $ISCC"
 
@@ -153,110 +155,17 @@ Write-Step "1" "Creating Windows icon (icon.ico)"
 if ($LASTEXITCODE -ne 0) { Write-Err "Icon conversion failed" }
 Write-Ok "images/icon.ico created"
 
-# ---- 2. Create config.yaml.example -----------------------------------------
-Write-Step "2" "Writing config.yaml.example"
-$cfgLines = @(
-    '# Slimarr configuration - edit these settings via the web UI at http://localhost:9494',
-    'server:',
-    '  port: 9494',
-    '',
-    'auth:',
-    '  secret_key: ""',
-    '  api_key: ""',
-    '',
-    'plex:',
-    '  url: ""',
-    '  token: ""',
-    '',
-    'download_client: "sabnzbd"',
-    '',
-    'sabnzbd:',
-    '  url: ""',
-    '  api_key: ""',
-    '  category: "slimarr"',
-    '',
-    'nzbget:',
-    '  url: ""',
-    '  username: ""',
-    '  password: ""',
-    '  category: "slimarr"',
-    '',
-    'tmdb:',
-    '  api_key: ""',
-    '',
-    'automation:',
-    '  dry_run: false',
-    '  review_required: false',
-    '',
-    'comparison:',
-    '  min_savings_percent: 10.0',
-    '  min_savings_mb_for_nas: 0',
-    '  allow_resolution_downgrade: false',
-    '  downgrade_min_savings_percent: 40.0',
-    '  preferred_codecs:',
-    '    - av1',
-    '    - h265',
-    '  preferred_audio_codecs: []',
-    '  require_preferred_audio_match: false',
-    '  preferred_language: english',
-    '  max_candidate_age_days: 3650',
-    '  minimum_file_size_mb: 500',
-    '  reject_upscaled: true',
-    '  minimum_confidence_score: 55.0',
-    '  require_year_match: true',
-    '',
-    'schedule:',
-    '  mode: nightly',
-    '  timezone: local',
-    '  start_time: "23:00"',
-    '  end_time: "05:00"',
-    '  days: [mon, tue, wed, thu, fri, sat, sun]',
-    '  min_cycle_interval_minutes: 60',
-    '  max_downloads_per_night: 10',
-    '  throttle_seconds: 30',
-    '  max_active_download_hours: 24',
-    '',
-    'exclusions:',
-    '  movie_ids: []',
-    '  title_keywords: []',
-    '  folders: []',
-    '  codecs: []',
-    '  resolutions: []',
-    '  minimum_file_size_mb: 0',
-    '  maximum_age_days: 0',
-    '',
-    'radarr:',
-    '  enabled: false',
-    '  url: ""',
-    '  api_key: ""',
-    '  # Action to take in Radarr after Slimarr replaces a file:',
-    '  #   rescan           - notify Radarr to rescan (default)',
-    '  #   rescan_unmonitor - rescan + unmonitor the movie (prevents Radarr re-downloading)',
-    '  #   none             - do nothing',
-    '  post_replace_action: "rescan"',
-    '',
-    'sonarr:',
-    '  enabled: false',
-    '  url: ""',
-    '  api_key: ""',
-    '',
-    'prowlarr:',
-    '  enabled: false',
-    '  url: ""',
-    '  api_key: ""',
-    '',
-    'files:',
-    '  recycling_bin: ""',
-    '  recycling_bin_cleanup_days: 30',
-    '  verify_after_download: true',
-    '  enable_media_probe: true',
-    '  nas_path_prefixes: []',
-    '  plex_path_mappings: []',
-    '',
-    'indexers: []'
-)
-$cfgLines | Set-Content -Path "$Root\config.yaml.example" -Encoding UTF8
-Write-Ok "config.yaml.example written"
+# ---- 2. Verify config.yaml.example ------------------------------------------
+# config.yaml.example is a source-controlled, hand-maintained file (kept in
+# sync with backend/config.py defaults). It used to be regenerated here from a
+# hardcoded copy embedded in this script, which silently went stale and once
+# overwrote real NAS-safety settings with old defaults (including flipping
+# enable_media_probe back to true). Verify it exists instead of duplicating it.
+Write-Step "2" "Verifying config.yaml.example"
+if (-not (Test-Path "$Root\config.yaml.example")) {
+    Write-Err "config.yaml.example not found in repo root - this file should be source-controlled, not generated."
+}
+Write-Ok "config.yaml.example present (source-controlled)"
 
 # ---- 3. Build frontend ------------------------------------------------------
 if (-not $SkipFrontend) {

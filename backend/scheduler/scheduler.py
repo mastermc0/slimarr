@@ -1,6 +1,8 @@
 """APScheduler configuration — nightly, continuous interval, and cleanup jobs."""
 from __future__ import annotations
 
+import asyncio
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -36,6 +38,7 @@ async def _cleanup_recycle_bin() -> None:
     import os
     import time
     from backend.config import get_config
+    from backend.core.storage import remove_path
 
     config = get_config()
     recycle_dir = config.files.recycling_bin
@@ -46,14 +49,30 @@ async def _cleanup_recycle_bin() -> None:
 
     cutoff = time.time() - max_age_days * 86400
     removed = 0
-    for fname in os.listdir(recycle_dir):
-        fpath = os.path.join(recycle_dir, fname)
-        if os.path.isfile(fpath) and os.path.getmtime(fpath) < cutoff:
-            try:
-                os.remove(fpath)
-                removed += 1
-            except Exception as e:
-                logger.warning(f"Failed to remove recycled file {fpath}: {e}")
+
+    def _expired_files() -> list[tuple[str, int]]:
+        expired: list[tuple[str, int]] = []
+        with os.scandir(recycle_dir) as entries:
+            for entry in entries:
+                try:
+                    stat = entry.stat(follow_symlinks=False)
+                    if entry.is_file(follow_symlinks=False) and stat.st_mtime < cutoff:
+                        expired.append((entry.path, int(stat.st_size)))
+                except OSError:
+                    continue
+        return expired
+
+    for fpath, file_size in await asyncio.to_thread(_expired_files):
+        try:
+            await remove_path(
+                fpath,
+                config,
+                purpose="scheduled_recycling_cleanup",
+                estimated_bytes=file_size,
+            )
+            removed += 1
+        except Exception as e:
+            logger.warning(f"Failed to remove recycled file {fpath}: {e}")
 
     if removed:
         logger.info(f"Cleaned {removed} file(s) from recycle bin")
@@ -93,6 +112,21 @@ async def _stale_download_recovery() -> None:
     resumed = await resume_downloading_downloads(limit=100)
     if resumed:
         logger.info(f"Stale download recovery resumed {resumed} workflow(s)")
+
+
+async def _telemetry_retention_cleanup() -> None:
+    """Purge old terminal job records and persisted storage operation logs."""
+    from backend.core.jobs import purge_old_jobs
+    from backend.core.storage import purge_old_storage_operations
+
+    jobs_removed = await purge_old_jobs(keep_days=30)
+    ops_removed = await purge_old_storage_operations(keep_days=30)
+    if jobs_removed or ops_removed:
+        logger.info(
+            "Telemetry retention: removed {} job record(s) and {} storage operation record(s)",
+            jobs_removed,
+            ops_removed,
+        )
 
 
 def start_scheduler() -> None:
@@ -155,6 +189,14 @@ def start_scheduler() -> None:
         _stale_download_recovery,
         IntervalTrigger(hours=1),
         id="stale_download_recovery",
+        replace_existing=True,
+    )
+
+    # Telemetry retention — daily at 05:00, removes terminal job and storage-op records older than 30 days.
+    scheduler.add_job(
+        _telemetry_retention_cleanup,
+        CronTrigger(hour=5, minute=0),
+        id="telemetry_retention_cleanup",
         replace_existing=True,
     )
 

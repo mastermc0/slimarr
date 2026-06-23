@@ -1,8 +1,10 @@
 # Slimarr Docker Deployment Guide
 
-> **v1.4 — "Containerised"**
+> **v1.7 — "Storage-Safe Automation"** (originally written for v1.4 "Containerised")
 
 This guide covers deploying Slimarr with Docker on Linux, including Unraid, Synology, Proxmox, TrueNAS SCALE, and Ubuntu/Debian servers.
+
+If your media library lives on a NAS share (the most common Docker setup), read [NAS Safety Settings](#nas-safety-settings) before your first automation cycle — v1.7 fixed a freeze/crash bug that affected NAS-backed replacement and adds tunable safety budgets.
 
 ---
 
@@ -65,6 +67,15 @@ Key env var:
 SLIMARR_DB_URL=postgresql+asyncpg://slimarr:change_me@postgres:5432/slimarr
 ```
 
+Optional pool tuning (defaults shown):
+
+```env
+SLIMARR_DB_POOL_SIZE=10
+SLIMARR_DB_MAX_OVERFLOW=20
+SLIMARR_DB_POOL_TIMEOUT=30
+SLIMARR_DB_POOL_RECYCLE=1800
+```
+
 You can verify runtime backend from the API:
 
 ```bash
@@ -100,7 +111,30 @@ All `SLIMARR_*` environment variables override the equivalent `config.yaml` key.
 | `SLIMARR_LOG_LEVEL` | `debug`, `info`, `warning`, `error` | `info` |
 | `SLIMARR_LOG_FORMAT` | `plain` or `json` | `plain` |
 | `SLIMARR_DB` | SQLite database path | `/app/data/slimarr.db` |
+| `SLIMARR_DB_URL` | Full SQLAlchemy async URL for PostgreSQL instead of SQLite | — |
 | `TZ` | Timezone (e.g. `America/New_York`) | `UTC` |
+
+### NAS safety settings
+
+Added in v1.6.1/v1.7 to fix and prevent NAS freeze/crash issues during replacement. All are optional; defaults are conservative.
+
+| Variable | Description | Default |
+|---|---|---|
+| `SLIMARR_NAS_PATH_PREFIXES` | Comma-separated path prefixes that Slimarr treats as NAS/network storage (e.g. `/media/movies,/media/tv`) | — |
+| `SLIMARR_ENABLE_MEDIA_PROBE` | Allow pymediainfo to read local files during scan for bitrate/codec enrichment | `false` |
+| `SLIMARR_NAS_MAX_TRANSFER_MBPS` | Rate-limit cross-device NAS file copies (MiB/s); `0` disables the limit | `50` |
+| `SLIMARR_NAS_COPY_CHUNK_MB` | Chunk size for rate-limited NAS copies | `8` |
+| `SLIMARR_NAS_MAX_WRITE_GB_PER_DAY` | Max bytes written to NAS paths per rolling 24h window; `0` disables the budget | `0` |
+| `SLIMARR_NAS_MAX_REPLACEMENTS_PER_DAY` | Max replacements against NAS paths per rolling 24h window; `0` disables the budget | `0` |
+| `SLIMARR_NAS_MAX_CONCURRENT_OPERATIONS` | Max concurrent NAS storage operations | `1` |
+| `SLIMARR_NAS_FAILURE_COOLDOWN_MINUTES` | Cooldown applied to NAS operations after a failure | `0` |
+| `SLIMARR_MIN_SAVINGS_MB_FOR_NAS` | Block low-value replacements on NAS paths below this savings threshold | `0` |
+| `SLIMARR_MIN_CYCLE_INTERVAL_MINUTES` | Minimum time between full automation cycles | `60` |
+| `SLIMARR_MAX_DOWNLOADS_PER_NIGHT` | Cap replacements per cycle to limit write bursts | `10` |
+| `SLIMARR_THROTTLE_SECONDS` | Pause after each successful replacement before starting the next | `30` |
+| `SLIMARR_MAX_ACTIVE_DOWNLOAD_HOURS` | Treat a download as stuck/orphaned after this many hours | — |
+
+Check current NAS pressure and recommended presets from **System → NAS Pressure** in the UI, or `GET /api/v1/system/nas-pressure`. A non-mutating path check is available at `GET /api/v1/system/storage/preflight?path=...`.
 
 ### Config precedence
 
@@ -119,6 +153,8 @@ SLIMARR_* env vars  →  config.yaml  →  built-in defaults
 | `/media/*` | Your media library paths | Required for file probing |
 
 ### Named volumes (recommended)
+
+Keep the data and config volumes on local SSD-backed storage, not on an SMB or NFS media share. The data volume contains SQLite, logs, and image-cache files that receive frequent small writes. Mount NAS media separately under the media paths.
 
 ```yaml
 volumes:
@@ -319,6 +355,13 @@ No authentication required. Exposes:
 | `slimarr_disk_free_bytes` | Free bytes on data partition |
 | `slimarr_cycle_running` | 1 if automation cycle is active |
 | `slimarr_search_degraded` | 1 if search pipeline is degraded |
+| `slimarr_jobs_active` | Number of active persistent jobs |
+| `slimarr_jobs_failed_total` | Total failed/recovery-required persistent jobs |
+| `slimarr_nas_cooldown_active` | 1 if NAS storage operations are in failure cooldown |
+| `slimarr_nas_storage_operations_active` | Current concurrent NAS storage operations |
+| `slimarr_storage_operations_total` | Total storage operations by type/status |
+| `slimarr_storage_operation_bytes_total` | Total bytes moved/removed by storage operations |
+| `slimarr_storage_operation_failures_total` | Total failed storage operations |
 
 #### Prometheus scrape config
 

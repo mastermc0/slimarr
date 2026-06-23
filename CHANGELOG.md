@@ -4,6 +4,212 @@ All notable changes to Slimarr are documented here.
 
 ---
 
+## [1.7.0.0] - 2026-06-23
+
+Standalone release summary: `docs/CHANGELOG_v1.7.0.0.md`
+
+Planning documents (history; not all tickets shipped in this release — see note below):
+
+- `docs/VERSION_1_7_CHANGELOG_DRAFT.md`
+- `docs/VERSION_1_7_ROADMAP.md`
+
+Primary release theme: storage-safe automation, NAS resilience, persistent
+jobs/recovery, and the start of a UI/visual fidelity refresh.
+
+This release closes out the storage-safety and persistent-jobs foundation
+(Phases 0-3 and 6-7 of the v1.7 roadmap) and the root cause of NAS
+freeze/crash reports, and makes a first pass at UI consistency (Operations
+page, confirm dialogs, empty/loading states, storage-state visual marks).
+The deeper visual redesign of Dashboard/Library/Movie Detail/Settings and new
+bitmap release assets (roadmap Phases 4-5) are still in progress and will
+ship in a follow-up release rather than being backdated into this one.
+
+### Phase 0 fixes
+
+- Fixed scan-time media probe fallback so lightweight config/test harnesses
+  without an explicit `files` section no longer fail during library scans.
+- Changed duplicate cleanup preview behavior so the System page no longer
+  refreshes Plex/NAS duplicate-preview scans every 45 seconds.
+- Added server-side duplicate-preview caching and made maintenance insights read
+  cached duplicate telemetry instead of triggering a fresh Plex/NAS scan.
+- Added environment variable support for NAS/storage safety settings:
+  `SLIMARR_ENABLE_MEDIA_PROBE`, `SLIMARR_NAS_PATH_PREFIXES`,
+  `SLIMARR_NAS_MAX_WRITE_GB_PER_DAY`,
+  `SLIMARR_NAS_MAX_REPLACEMENTS_PER_DAY`,
+  `SLIMARR_NAS_MAX_CONCURRENT_OPERATIONS`,
+  `SLIMARR_NAS_FAILURE_COOLDOWN_MINUTES`,
+  `SLIMARR_MIN_SAVINGS_MB_FOR_NAS`, `SLIMARR_MIN_CYCLE_INTERVAL_MINUTES`,
+  `SLIMARR_MAX_DOWNLOADS_PER_NIGHT`, `SLIMARR_THROTTLE_SECONDS`, and
+  `SLIMARR_MAX_ACTIVE_DOWNLOAD_HOURS`.
+- Added startup diagnostics warning when Slimarr runs outside the supported
+  Python 3.11-3.13 range.
+- Added shared storage path helpers for NAS prefix matching and storage path
+  classification, with regression tests.
+- Updated NAS pressure and comparison policy to share the same NAS path matching
+  logic.
+- Adjusted low-pressure NAS recommendations so configured NAS installs are not
+  nudged toward aggressive mode by default.
+- Fixed Plex post-replacement refresh so installs without explicit Plex library
+  sections refresh all movie sections instead of doing nothing.
+- Improved duplicate-preview cache reuse so a larger cached preview can satisfy
+  lighter maintenance telemetry reads without another Plex/NAS scan.
+- Added a non-mutating storage preflight helper and `/system/storage/preflight`
+  endpoint for path classification, parent accessibility, free-space checks, and
+  future replacement/cleanup safety gates.
+- Routed replacement target preflight, recycle moves, fallback backups, restore
+  moves, final placement, and old-file deletes through the shared async storage
+  operation helpers instead of raw library-path `shutil.move`/`os.remove` calls.
+- Added per-path storage operation locks and routed duplicate cleanup,
+  failed-download cleanup, orphan cleanup, replacement staging cleanup, manual
+  recycling purge, and scheduled recycling purge through the shared storage
+  operation helpers.
+- Added storage operation telemetry for recent move/delete outcomes and exposed
+  it through diagnostics bundles and Prometheus metrics.
+- Added optional in-memory NAS storage budgets for daily write volume, daily
+  replacement count, concurrent NAS operations, and cooldown after failed NAS
+  operations.
+- Added a storage operations telemetry endpoint, health-matrix component, and
+  System page readout for recent storage outcomes, NAS cooldown state, active
+  NAS operations, and 24-hour NAS write/replacement counters.
+- Changed storage-operation health warnings to use a bounded recent-failure
+  window so old in-memory failures remain inspectable without degrading system
+  health indefinitely.
+- Added persisted storage operation telemetry and path-health tables so move,
+  delete, skip, and failure history can survive process restarts and appear in
+  diagnostics/support data.
+- Added replacement recovery metadata tracking so risky replacement phases
+  record original, target, recycle, backup, phase, and recovery-required state
+  before and after library-file mutations.
+- Refreshed the System page into a wider v1.7 operations surface and added a
+  Storage Safety panel with live storage preflight status.
+- Added a System page Replacement Recovery panel that surfaces active and
+  recovery-required replacement records, latest risky phase, redacted target and
+  backup paths, and manual refresh.
+- Added the initial persistent job runtime with durable `jobs` and `job_events`
+  tables, startup recovery for interrupted running jobs, job event timelines,
+  cancellation/retry APIs, Prometheus job metrics, diagnostics bundle job
+  timeline export, and job IDs attached to storage operation telemetry.
+- Routed manual scans, full automation cycles, duplicate-preview refreshes,
+  duplicate cleanup, and manual scheduled-task runs through persistent job
+  records.
+- Added a System page Persistent Jobs panel showing recent jobs, active work,
+  failed/recovery-required counts, and latest job state.
+- Added the first v1.7 visual asset and source notes:
+  `images/releases/v1.7-storage-safe-banner.png` and
+  `docs/assets/V1_7_VISUAL_ASSETS.md`.
+
+### NAS freeze/crash fix and hardening pass
+
+- **Fixed the root cause of NAS freezes/crashes during replacement.**
+  `replace_file()` (the function that actually swaps a downloaded file into
+  the Plex library) was calling `shutil.disk_usage()`, `os.makedirs()`,
+  `os.path.exists()/getsize()/isdir()`, and a recursive `os.walk()` directly
+  on the asyncio event loop instead of through `asyncio.to_thread()`. On a
+  slow, busy, or sleeping NAS share these syscalls can block for seconds;
+  because they ran on the event loop, that block stalled the *entire app* —
+  API requests, the websocket, and the scheduler — for the duration, which
+  presented as the whole instance freezing. Every blocking filesystem call in
+  the replacement path is now offloaded to a worker thread, matching the
+  pattern already used in `storage.py` and `scheduler.py`. The same blocking
+  pattern was fixed in the duplicate-cleanup scan (`cleanup.py`), which ran
+  `os.path.exists`/`os.path.getsize` against every Plex media part, and in the
+  `/system/storage/preflight` diagnostics endpoint.
+- Added regression tests (`tests/backend/test_replacer_event_loop.py`) that
+  assert the offloaded filesystem helpers genuinely run off the event loop
+  rather than just trusting the call site.
+- Hardened the SQLite lightweight-migration helpers (`backend/database.py`)
+  against unsafe table/column identifiers before they're interpolated into
+  DDL strings, as defense-in-depth.
+- Replaced several silent `except Exception: pass` blocks in the Plex
+  integration and login-lockout audit path with logged warnings so
+  connectivity/auth issues are diagnosable instead of invisible.
+- Removed an accidentally committed 6MB log archive and diagnostics history
+  file from `docs/logs-new/` and tightened `.gitignore` so log/`.jsonl`
+  artifacts outside the canonical `logs/` directory are also excluded.
+
+### Phase 3 / 4 / 6 enhancements
+
+- Moved recycle-bin health and cleanup traversal off the async request loop and
+  reused cached/single-pass directory snapshots to reduce NAS metadata storms.
+- Changed storage moves and deletes to calculate directory size once per
+  operation instead of repeatedly traversing the same tree.
+- Made 24-hour NAS write and replacement budgets consult persisted operation
+  history so limits survive process restarts, with in-flight budget reservation.
+- Added chunked, rate-limited cross-device NAS file moves with temporary-target
+  placement and conservative balanced defaults.
+- Forwarded NAS safety environment variables through all Docker Compose variants.
+- Added a responsive mobile navigation drawer, accessible notifications,
+  reduced-motion support, and calmer System-page polling.
+
+- Added `purge_old_jobs(keep_days)` to the job runtime so terminal job records
+  (and their cascaded events) older than a configured window are automatically
+  removed.
+- Added `purge_old_storage_operations(keep_days)` to the storage module so
+  persisted storage operation log entries are automatically trimmed.
+- Added a daily `telemetry_retention_cleanup` scheduler job (05:00 UTC) that
+  runs both purge functions with a 30-day default retention window.
+- Added a `POST /system/telemetry/purge` endpoint so operators can trigger
+  retention cleanup manually with an optional `keep_days` parameter.
+- Added an explicit API response schema for manual telemetry purge results so
+  OpenAPI contracts stay complete.
+- Added NAS path classification summary (`system.nas.classification.json`) to
+  the diagnostics bundle, including configured NAS prefixes, per-prefix
+  classification, and NAS policy state.
+- Added a dedicated Operations page (`/system/operations`) with active and
+  historical job tables, per-job event timelines, cancel/retry actions, storage
+  operation log (in-memory and persisted), NAS budget footer, and a guarded
+  purge action.
+- Added a reusable `ConfirmDialog` component for destructive-action confirmation
+  with consistent visual treatment, keyboard dismiss, and loading state.
+- Added a `Skeleton` component family (`Skeleton`, `SkeletonCard`, `SkeletonRow`,
+  `SkeletonTable`) for consistent loading placeholder states.
+- Added a reusable `EmptyState` component for empty list/table surfaces.
+- Applied `ConfirmDialog` to the System page recycling-bin purge and duplicate
+  cleanup triggers, replacing `window.confirm` native dialogs.
+- Added "View all" link from the System page Persistent Jobs panel to the
+  Operations page.
+- Added Operations page to the sidebar navigation.
+
+### GUI and code-health pass
+
+- Implemented `files.verify_after_download` (previously a documented no-op
+  that warned on every startup despite defaulting to `true`). Replacement now
+  rejects empty/zero-byte downloads before they touch the library, and — when
+  `files.enable_media_probe` is also enabled — logs a warning if a downloaded
+  file has no detectable video stream, without hard-blocking on probe
+  flakiness. Removed the now-stale "not yet implemented" startup warning.
+- Unified destructive-action confirmation across the app: replaced the
+  bespoke TV-show delete modal with the shared `ConfirmDialog`, and added
+  confirmation prompts to two previously unconfirmed destructive actions —
+  removing a blacklist entry and cleaning up an orphaned download — that
+  could previously fire immediately on click.
+- Added `Skeleton`/`EmptyState` treatment to the Blacklist page, matching the
+  pattern already used on Library, Operations, Queue, and Orphaned Downloads.
+- Added a small storage-state visual mark system (`StorageStateMark`) that
+  maps replacement-recovery phase strings (preflight, recycling, backing up,
+  placing, restoring, failed, recovery-required) to a consistent icon and
+  color instead of raw phase text, and applied it to the System page
+  Replacement Recovery panel.
+- Added a startup warning when `server.allowed_origins` includes `*`. Risk is
+  lower than typical wildcard-CORS because `allow_credentials=False` (no
+  cookies are sent cross-origin), but it still allows any site to call the
+  API with a leaked bearer token, so it's now surfaced instead of silent.
+- Documented the full NAS-safety environment variable set and the new
+  Prometheus metrics (`slimarr_jobs_active`, `slimarr_storage_operations_total`,
+  etc.) in `docs/DOCKER.md`, which previously only covered the pre-1.6.1
+  variables and metrics.
+- Fixed `build-installer.ps1` overwriting the maintained `config.yaml.example`
+  with a stale, hardcoded copy on every installer build — it had drifted to
+  omit all NAS budget settings and flip `enable_media_probe` back to `true`
+  (the unsafe default). The script now verifies the source-controlled file
+  exists instead of regenerating it.
+- Added `requirements-tray.txt` (pystray/pillow/pywin32) and wired it into
+  `install.ps1`; these were required by `slimarr.spec`'s PyInstaller hidden
+  imports but were never actually installed by the documented setup path,
+  so the tray icon could be broken in a from-scratch build.
+- Fixed `build-installer.ps1`'s Inno Setup detection to also find Inno Setup
+  7 (it only looked for "Inno Setup 6" in its hardcoded paths).
+
 ## [1.6.1.0] - 2026-05-27
 
 ### NAS resilience and UI polish

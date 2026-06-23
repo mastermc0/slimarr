@@ -1,16 +1,19 @@
 """
-File replacer — moves the downloaded file into place and refreshes Plex.
+File replacer - moves the downloaded file into place and refreshes Plex.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
+import json
 from datetime import datetime, timezone
 
 from loguru import logger
 from sqlalchemy import select
 
-from backend.database import ActivityLog, Download, Movie, async_session
+from backend.core.storage import move_path, preflight_storage_path, remove_path
+from backend.database import ActivityLog, Download, Movie, ReplacementRecoveryRecord, async_session
 from backend.realtime.events import emit_event
 
 SUPPORTED_EXTENSIONS = {".mkv", ".mp4", ".avi", ".m4v"}
@@ -24,17 +27,76 @@ def _find_video_file(directory: str) -> str | None:
     return None
 
 
-def _cleanup_download_folder(storage_path: str) -> None:
+# All of these can resolve to a NAS/network path (recycling bin, Plex library
+# mount, SABnzbd staging dir). Running them straight on the event loop blocks
+# the entire app — including unrelated API requests and the scheduler — for as
+# long as the share takes to respond, which on a slow/sleeping NAS can be
+# seconds. Every call goes through a worker thread instead.
+async def _exists(path: str) -> bool:
+    return await asyncio.to_thread(os.path.exists, path)
+
+
+async def _isdir(path: str) -> bool:
+    return await asyncio.to_thread(os.path.isdir, path)
+
+
+async def _getsize(path: str) -> int:
+    return await asyncio.to_thread(os.path.getsize, path)
+
+
+async def _makedirs(path: str) -> None:
+    await asyncio.to_thread(os.makedirs, path, exist_ok=True)
+
+
+async def _disk_free(path: str) -> int:
+    return await asyncio.to_thread(lambda: shutil.disk_usage(path).free)
+
+
+async def _find_video_file_async(directory: str) -> str | None:
+    return await asyncio.to_thread(_find_video_file, directory)
+
+
+async def _verify_downloaded_file(video_file: str, config) -> str | None:
+    """Sanity-check a downloaded file before it replaces a working library copy.
+
+    Returns an error description if verification fails, or None if the file
+    looks usable. Always checks for a non-empty file (cheap, no false
+    positives). Only probes the actual media streams when
+    `files.enable_media_probe` is also on, and a probe failure is logged as a
+    warning rather than blocking replacement, since pymediainfo can be flaky
+    on some containers and we don't want to invent a new failure mode for a
+    "verify" feature that was previously a no-op.
+    """
+    size = await _getsize(video_file)
+    if size <= 0:
+        return f"downloaded file is empty: {video_file!r}"
+
+    if getattr(config.files, "enable_media_probe", False):
+        from backend.core.media_probe import probe_media_file
+
+        probe = await asyncio.to_thread(probe_media_file, video_file)
+        if not probe or not (probe.get("video_codec") or probe.get("resolution")):
+            logger.warning(
+                "Downloaded file verification probe found no usable video stream "
+                "(continuing anyway): {!r}",
+                video_file,
+            )
+
+    return None
+
+
+async def _cleanup_download_folder(storage_path: str, config) -> None:
     """Remove the SABnzbd download folder. Called on both success and failure."""
     if not storage_path:
         return
     try:
-        if os.path.isdir(storage_path):
-            shutil.rmtree(storage_path, ignore_errors=True)
-            logger.info(f"Cleaned up download folder: {storage_path!r}")
-        elif os.path.isfile(storage_path):
-            os.remove(storage_path)
-            logger.info(f"Cleaned up download file: {storage_path!r}")
+        result = await remove_path(
+            storage_path,
+            config,
+            purpose="replacement_download_staging_cleanup",
+            recursive=True,
+        )
+        logger.info(f"Cleaned up download staging path: {storage_path!r} ({result.status})")
     except Exception as e:
         logger.warning(f"Cleanup of {storage_path!r} failed (non-fatal): {e}")
 
@@ -55,9 +117,70 @@ def _apply_path_mapping(path: str, mappings: list) -> str:
         if plex_pfx and norm.startswith(plex_pfx + "/"):
             remainder = path[len(plex_pfx):].lstrip("/\\")
             mapped = os.path.join(local_pfx, remainder)
-            logger.info(f"Path mapping applied: {path!r} → {mapped!r}")
+            logger.info(f"Path mapping applied: {path!r} -> {mapped!r}")
             return mapped
     return path
+
+
+def _utc_now_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+async def _create_replacement_recovery_record(
+    db,
+    *,
+    download_id: int,
+    movie: Movie,
+    original_path: str,
+    mapped_path: str,
+    target_path: str,
+    video_file_path: str,
+    storage_path: str,
+) -> ReplacementRecoveryRecord:
+    record = ReplacementRecoveryRecord(
+        download_id=download_id,
+        movie_id=movie.id,
+        movie_title=movie.title,
+        status="running",
+        phase="preflight_complete",
+        original_path=original_path,
+        mapped_path=mapped_path,
+        target_path=target_path,
+        video_file_path=video_file_path,
+        storage_path=storage_path,
+        details=json.dumps({"quality_intent": getattr(movie, "quality_intent", None)}),
+        updated_at=_utc_now_naive(),
+    )
+    db.add(record)
+    await db.commit()
+    await db.refresh(record)
+    return record
+
+
+async def _mark_replacement_recovery(
+    db,
+    record: ReplacementRecoveryRecord | None,
+    *,
+    phase: str,
+    status: str = "running",
+    error: str | None = None,
+    recycle_path: str | None = None,
+    fallback_backup_path: str | None = None,
+) -> None:
+    if record is None:
+        return
+    record.phase = phase
+    record.status = status
+    record.updated_at = _utc_now_naive()
+    if error is not None:
+        record.error_message = error
+    if recycle_path is not None:
+        record.recycle_path = recycle_path
+    if fallback_backup_path is not None:
+        record.fallback_backup_path = fallback_backup_path
+    if status in {"completed", "failed", "recovery_required"}:
+        record.completed_at = _utc_now_naive()
+    await db.commit()
 
 
 async def _run_radarr_post_replace(movie: Movie, config) -> None:
@@ -96,6 +219,7 @@ async def replace_file(download_id: int) -> bool:
 
     config = get_config()
     storage_path: str = ""
+    recovery_record: ReplacementRecoveryRecord | None = None
     if config.automation.dry_run:
         logger.info(f"Dry-run: replacement skipped for download {download_id}")
         return False
@@ -112,51 +236,65 @@ async def replace_file(download_id: int) -> bool:
             raise ValueError(f"Movie {dl.movie_id} not found")
 
         storage_path = dl.storage_path
-        if not storage_path or not os.path.exists(storage_path):
+        if not storage_path or not await _exists(storage_path):
             err = f"Downloaded storage path missing or inaccessible: {storage_path!r}"
             logger.error(err)
             dl.status = "failed"
             dl.error_message = err
             await db.commit()
-            _cleanup_download_folder(storage_path)
+            await _cleanup_download_folder(storage_path, config)
             return False
 
-        logger.info(f"Replace starting — storage_path={storage_path!r}")
+        logger.info(f"Replace starting - storage_path={storage_path!r}")
 
         # Find the actual video file inside the SABnzbd completed folder
-        video_file = _find_video_file(storage_path) if os.path.isdir(storage_path) else storage_path
+        video_file = (
+            await _find_video_file_async(storage_path)
+            if await _isdir(storage_path)
+            else storage_path
+        )
         if not video_file:
             err = f"No video file found in {storage_path!r}"
             logger.error(err)
             dl.status = "failed"
             dl.error_message = err
             await db.commit()
-            _cleanup_download_folder(storage_path)
+            await _cleanup_download_folder(storage_path, config)
             return False
 
         logger.info(f"Video file found: {video_file!r}")
 
+        if getattr(config.files, "verify_after_download", False):
+            verify_error = await _verify_downloaded_file(video_file, config)
+            if verify_error:
+                logger.error(f"Download verification failed: {verify_error}")
+                dl.status = "failed"
+                dl.error_message = f"Download verification failed: {verify_error}"
+                await db.commit()
+                await _cleanup_download_folder(storage_path, config)
+                return False
+
         original_path = movie.file_path
         if not original_path:
-            err = "Original file path unknown — cannot replace"
+            err = "Original file path unknown - cannot replace"
             logger.error(err)
             dl.status = "failed"
             dl.error_message = err
             await db.commit()
-            _cleanup_download_folder(storage_path)
+            await _cleanup_download_folder(storage_path, config)
             return False
 
         logger.info(f"Original Plex path: {original_path!r}")
 
-        # Apply path mappings (Plex-reported path → locally accessible path)
+        # Apply path mappings (Plex-reported path -> locally accessible path)
         path_mappings = getattr(config.files, 'plex_path_mappings', [])
         mapped_path = _apply_path_mapping(original_path, path_mappings)
         if mapped_path != original_path:
             logger.info(f"Mapped original path: {mapped_path!r}")
 
-        if not os.path.exists(mapped_path):
+        if not await _exists(mapped_path):
             logger.warning(
-                f"Original file does not exist at {mapped_path!r} — "
+                f"Original file does not exist at {mapped_path!r} - "
                 "it may have been moved or deleted already. Proceeding with placement only."
             )
 
@@ -164,123 +302,310 @@ async def replace_file(download_id: int) -> bool:
         target_dir = os.path.dirname(mapped_path)
         ext = os.path.splitext(video_file)[1]
         target_path = os.path.splitext(mapped_path)[0] + ext
-        video_size = os.path.getsize(video_file)
+        video_size = await _getsize(video_file)
 
-        logger.info(f"Target dir: {target_dir!r} — target path: {target_path!r}")
+        logger.info(f"Target dir: {target_dir!r} - target path: {target_path!r}")
+
+        target_preflight = await asyncio.to_thread(
+            preflight_storage_path,
+            target_path,
+            config,
+            required_bytes=0 if await _exists(target_path) else video_size,
+            purpose="place_replacement",
+        )
+        for message in target_preflight.messages:
+            logger.info(f"Replacement target preflight: {message}")
+        if target_preflight.status == "block":
+            err = "Replacement target preflight blocked operation: " + "; ".join(target_preflight.messages)
+            logger.error(err)
+            dl.status = "failed"
+            dl.error_message = err
+            await db.commit()
+            await _cleanup_download_folder(storage_path, config)
+            return False
+
+        recovery_record = await _create_replacement_recovery_record(
+            db,
+            download_id=download_id,
+            movie=movie,
+            original_path=original_path,
+            mapped_path=mapped_path,
+            target_path=target_path,
+            video_file_path=video_file,
+            storage_path=storage_path,
+        )
 
         # Recycle bin step: move original to recycle directory (if configured)
         recycle_dir = config.files.recycling_bin
         recycled_successfully = False
         fallback_backup_path: str | None = None
         if recycle_dir:
-            os.makedirs(recycle_dir, exist_ok=True)
+            await _makedirs(recycle_dir)
             folder_name = os.path.basename(os.path.dirname(mapped_path))
             base_name = os.path.basename(mapped_path)
             recycled_name = f"{folder_name}_{base_name}" if folder_name else base_name
             recycled_path = os.path.join(recycle_dir, recycled_name)
-            original_size = os.path.getsize(mapped_path) if os.path.exists(mapped_path) else 0
-            recycle_free = shutil.disk_usage(recycle_dir).free
-            if original_size > 0 and recycle_free < original_size:
+            original_size = await _getsize(mapped_path) if await _exists(mapped_path) else 0
+            recycle_preflight = await asyncio.to_thread(
+                preflight_storage_path,
+                recycled_path,
+                config,
+                required_bytes=original_size,
+                purpose="recycle_original",
+            )
+            if recycle_preflight.status == "block":
                 logger.warning(
-                    "Recycle bin has insufficient free space "
-                    f"({recycle_free:,} free, {original_size:,} needed); using local backup fallback"
+                    "Recycle bin preflight blocked move; using local backup fallback: {}",
+                    "; ".join(recycle_preflight.messages),
                 )
             else:
                 try:
-                    shutil.move(mapped_path, recycled_path)
-                    logger.info(f"Moved original to recycle bin: {recycled_path}")
+                    await _mark_replacement_recovery(
+                        db,
+                        recovery_record,
+                        phase="recycle_original_started",
+                        recycle_path=recycled_path,
+                    )
+                    result = await move_path(
+                        mapped_path,
+                        recycled_path,
+                        config,
+                        purpose="recycle_original",
+                    )
+                    logger.info(f"Moved original to recycle bin: {recycled_path} ({result.status})")
                     recycled_successfully = True
+                    await _mark_replacement_recovery(
+                        db,
+                        recovery_record,
+                        phase="recycle_original_completed",
+                        recycle_path=recycled_path,
+                    )
                 except Exception as e:
                     logger.warning(f"Recycle move failed (continuing): {e}")
+                    await _mark_replacement_recovery(
+                        db,
+                        recovery_record,
+                        phase="recycle_original_failed",
+                        error=str(e),
+                        recycle_path=recycled_path,
+                    )
 
-        if not recycled_successfully and os.path.exists(target_path):
+        if not recycled_successfully and await _exists(target_path):
             backup_base = f"{target_path}.slimarr-old"
             fallback_backup_path = backup_base
             suffix = 1
-            while os.path.exists(fallback_backup_path):
+            while await _exists(fallback_backup_path):
                 fallback_backup_path = f"{backup_base}.{suffix}"
                 suffix += 1
             try:
-                shutil.move(target_path, fallback_backup_path)
+                await _mark_replacement_recovery(
+                    db,
+                    recovery_record,
+                    phase="backup_existing_target_started",
+                    fallback_backup_path=fallback_backup_path,
+                )
+                await move_path(
+                    target_path,
+                    fallback_backup_path,
+                    config,
+                    purpose="backup_existing_target",
+                    required_bytes=0,
+                )
                 logger.info(f"Moved existing target aside before replacement: {fallback_backup_path}")
+                await _mark_replacement_recovery(
+                    db,
+                    recovery_record,
+                    phase="backup_existing_target_completed",
+                    fallback_backup_path=fallback_backup_path,
+                )
             except Exception as e:
                 err = f"Could not move existing target before replacement: {e}"
                 logger.error(err)
+                await _mark_replacement_recovery(
+                    db,
+                    recovery_record,
+                    phase="backup_existing_target_failed",
+                    status="failed",
+                    error=err,
+                    fallback_backup_path=fallback_backup_path,
+                )
                 dl.status = "failed"
                 dl.error_message = err
                 await db.commit()
-                _cleanup_download_folder(storage_path)
+                await _cleanup_download_folder(storage_path, config)
                 return False
 
         # Move new file into place
-        if not os.path.isdir(target_dir):
+        if not await _isdir(target_dir):
             logger.error(
-                f"Target directory does not exist: {target_dir!r} — "
+                f"Target directory does not exist: {target_dir!r} - "
                 "check that the Plex library path is accessible from Slimarr, "
                 "or configure a path mapping in Settings."
+            )
+            await _mark_replacement_recovery(
+                db,
+                recovery_record,
+                phase="target_directory_missing",
+                status="recovery_required" if recycled_successfully or fallback_backup_path else "failed",
+                error=f"Target directory not found: {target_dir}",
+                fallback_backup_path=fallback_backup_path,
             )
             dl.status = "failed"
             dl.error_message = f"Target directory not found: {target_dir}"
             await db.commit()
-            _cleanup_download_folder(storage_path)
+            await _cleanup_download_folder(storage_path, config)
             return False
 
-        os.makedirs(target_dir, exist_ok=True)
-        target_free = shutil.disk_usage(target_dir).free
-        if target_free < video_size and not fallback_backup_path and not os.path.exists(target_path):
+        await _makedirs(target_dir)
+        target_free = await _disk_free(target_dir)
+        if target_free < video_size and not fallback_backup_path and not await _exists(target_path):
             err = (
                 "Target drive has insufficient free space for replacement "
                 f"({target_free:,} free, {video_size:,} needed)"
             )
             logger.error(err)
-            if fallback_backup_path and os.path.exists(fallback_backup_path) and not os.path.exists(target_path):
+            if (
+                fallback_backup_path
+                and await _exists(fallback_backup_path)
+                and not await _exists(target_path)
+            ):
                 try:
-                    shutil.move(fallback_backup_path, target_path)
+                    await move_path(
+                        fallback_backup_path,
+                        target_path,
+                        config,
+                        purpose="restore_original_after_free_space_failure",
+                        required_bytes=0,
+                    )
                     logger.info(f"Restored original file after free-space failure: {target_path}")
                 except Exception as restore_error:
                     logger.error(f"Failed to restore original file after free-space failure: {restore_error}")
+            await _mark_replacement_recovery(
+                db,
+                recovery_record,
+                phase="free_space_preflight_failed",
+                status="recovery_required" if recycled_successfully else "failed",
+                error=err,
+                fallback_backup_path=fallback_backup_path,
+            )
             dl.status = "failed"
             dl.error_message = err
             await db.commit()
-            _cleanup_download_folder(storage_path)
+            await _cleanup_download_folder(storage_path, config)
             return False
-        logger.info(f"Moving {video_file!r} → {target_path!r}")
+        logger.info(f"Moving {video_file!r} -> {target_path!r}")
         try:
-            shutil.move(video_file, target_path)
+            await _mark_replacement_recovery(
+                db,
+                recovery_record,
+                phase="place_replacement_started",
+                fallback_backup_path=fallback_backup_path,
+            )
+            await move_path(video_file, target_path, config, purpose="place_replacement")
+            await _mark_replacement_recovery(
+                db,
+                recovery_record,
+                phase="place_replacement_completed",
+                fallback_backup_path=fallback_backup_path,
+            )
         except Exception as e:
             err = f"File move failed: {e}"
             logger.error(err)
-            if fallback_backup_path and os.path.exists(fallback_backup_path) and not os.path.exists(target_path):
+            restored_after_failure = False
+            if (
+                fallback_backup_path
+                and await _exists(fallback_backup_path)
+                and not await _exists(target_path)
+            ):
                 try:
-                    shutil.move(fallback_backup_path, target_path)
+                    await move_path(
+                        fallback_backup_path,
+                        target_path,
+                        config,
+                        purpose="restore_original_after_move_failure",
+                        required_bytes=0,
+                    )
                     logger.info(f"Restored original file after failed replacement: {target_path}")
+                    restored_after_failure = True
                 except Exception as restore_error:
                     logger.error(f"Failed to restore original file after move failure: {restore_error}")
+                    await _mark_replacement_recovery(
+                        db,
+                        recovery_record,
+                        phase="restore_original_after_move_failure_failed",
+                        status="recovery_required",
+                        error=f"{err}; restore failed: {restore_error}",
+                        fallback_backup_path=fallback_backup_path,
+                    )
+            if restored_after_failure:
+                await _mark_replacement_recovery(
+                    db,
+                    recovery_record,
+                    phase="restore_original_after_move_failure_completed",
+                    status="failed",
+                    error=err,
+                    fallback_backup_path=fallback_backup_path,
+                )
+            elif recycled_successfully:
+                await _mark_replacement_recovery(
+                    db,
+                    recovery_record,
+                    phase="place_replacement_failed_original_recycled",
+                    status="recovery_required",
+                    error=err,
+                    fallback_backup_path=fallback_backup_path,
+                )
+            else:
+                await _mark_replacement_recovery(
+                    db,
+                    recovery_record,
+                    phase="place_replacement_failed",
+                    status="failed",
+                    error=err,
+                    fallback_backup_path=fallback_backup_path,
+                )
             dl.status = "failed"
             dl.error_message = err
             await db.commit()
-            _cleanup_download_folder(storage_path)
+            await _cleanup_download_folder(storage_path, config)
             return False
 
-        logger.info(f"File move succeeded. New size: {os.path.getsize(target_path):,} bytes")
+        logger.info(f"File move succeeded. New size: {await _getsize(target_path):,} bytes")
 
-        if fallback_backup_path and os.path.exists(fallback_backup_path):
+        if fallback_backup_path and await _exists(fallback_backup_path):
             try:
-                os.remove(fallback_backup_path)
+                await remove_path(
+                    fallback_backup_path,
+                    config,
+                    purpose="delete_fallback_backup_after_success",
+                )
                 logger.info(f"Deleted fallback backup after successful replacement: {fallback_backup_path}")
             except Exception as e:
                 logger.warning(f"Failed to delete fallback backup: {e}")
+                await _mark_replacement_recovery(
+                    db,
+                    recovery_record,
+                    phase="delete_fallback_backup_failed",
+                    error=str(e),
+                    fallback_backup_path=fallback_backup_path,
+                )
 
         # If not recycled and extensions differ, explicitly delete the old file
-        if not recycled_successfully and mapped_path != target_path and os.path.exists(mapped_path):
+        if not recycled_successfully and mapped_path != target_path and await _exists(mapped_path):
             try:
-                os.remove(mapped_path)
+                await remove_path(mapped_path, config, purpose="delete_old_extension_after_replacement")
                 logger.info(f"Deleted old file: {mapped_path}")
             except Exception as e:
                 logger.warning(f"Failed to delete old file: {e}")
+                await _mark_replacement_recovery(
+                    db,
+                    recovery_record,
+                    phase="delete_old_extension_failed",
+                    error=str(e),
+                )
 
         # Update movie record
-        new_size = os.path.getsize(target_path)
+        new_size = await _getsize(target_path)
         if movie.original_file_size is None:
             movie.original_file_size = movie.file_size
         movie.file_path = target_path
@@ -293,6 +618,10 @@ async def replace_file(download_id: int) -> bool:
 
         # Log activity
         savings_bytes = (movie.original_file_size or 0) - new_size
+        # Keep cumulative per-movie savings and replacement count up to date.
+        if savings_bytes > 0:
+            movie.total_savings = int(movie.total_savings or 0) + savings_bytes
+        movie.times_replaced = int(movie.times_replaced or 0) + 1
         log = ActivityLog(
             movie_id=movie.id,
             movie_title=movie.title,
@@ -306,6 +635,13 @@ async def replace_file(download_id: int) -> bool:
         )
         db.add(log)
         await db.commit()
+        await _mark_replacement_recovery(
+            db,
+            recovery_record,
+            phase="db_committed",
+            status="completed",
+            fallback_backup_path=fallback_backup_path,
+        )
 
         await emit_event("replace:completed", {
             "movie_id": movie.id,
@@ -327,6 +663,6 @@ async def replace_file(download_id: int) -> bool:
         await _run_radarr_post_replace(movie, config)
 
         # Clean up the SABnzbd download folder now that we're done with it
-        _cleanup_download_folder(storage_path)
+        await _cleanup_download_folder(storage_path, config)
 
         return True

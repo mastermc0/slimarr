@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api } from '@/lib/api'
 import { useToast } from '@/components/Toast'
-import { Tv2, Eye, Trash2, RefreshCw, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react'
+import { Tv2, Eye, Trash2, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
+import ConfirmDialog from '@/components/ConfirmDialog'
 
 interface TVShow {
   plex_rating_key: string
@@ -41,78 +42,6 @@ function staleness(show: TVShow, staleDays: number): 'never' | 'stale' | 'watche
     if (last < cutoff) return 'stale'
   }
   return 'watched'
-}
-
-interface ConfirmModalProps {
-  show: TVShow
-  sonarrEnabled: boolean
-  onConfirm: (unmonitorSonarr: boolean) => void
-  onCancel: () => void
-  deleting: boolean
-}
-
-function ConfirmModal({ show, sonarrEnabled, onConfirm, onCancel, deleting }: ConfirmModalProps) {
-  const [unmonitor, setUnmonitor] = useState(true)
-  return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-gray-900 rounded-xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-gray-700">
-        <div className="flex items-start gap-3">
-          <AlertTriangle size={20} className="text-red-400 shrink-0 mt-0.5" />
-          <div>
-            <h2 className="font-bold text-lg">Delete TV Show?</h2>
-            <p className="text-gray-400 text-sm mt-1">
-              This will permanently delete <span className="text-white font-medium">{show.title}</span> ({fmtSize(show.total_size_bytes)}) from your disk and remove it from Plex. This cannot be undone.
-            </p>
-          </div>
-        </div>
-
-        <div className="bg-gray-800 rounded-lg p-3 text-sm space-y-1">
-          <div className="flex justify-between">
-            <span className="text-gray-400">Episodes</span>
-            <span>{show.episode_count}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-400">Disk usage</span>
-            <span className="text-red-300 font-medium">{fmtSize(show.total_size_bytes)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-400">Last watched</span>
-            <span>{fmtDate(show.last_watched_at)}</span>
-          </div>
-        </div>
-
-        {sonarrEnabled && (
-          <label className="flex items-center gap-3 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={unmonitor}
-              onChange={(e) => setUnmonitor(e.target.checked)}
-              className="w-4 h-4 accent-brand-green"
-            />
-            <span className="text-sm">Also unmonitor in Sonarr (prevents automatic re-download)</span>
-          </label>
-        )}
-
-        <div className="flex gap-3 justify-end pt-2">
-          <button
-            onClick={onCancel}
-            disabled={deleting}
-            className="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-sm disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => onConfirm(sonarrEnabled && unmonitor)}
-            disabled={deleting}
-            className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm flex items-center gap-2 disabled:opacity-50"
-          >
-            <Trash2 size={14} />
-            {deleting ? 'Deleting…' : 'Yes, Delete'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
 }
 
 interface ShowRowProps {
@@ -216,6 +145,7 @@ export default function TVShows() {
   const [pendingDelete, setPendingDelete] = useState<TVShow | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [sonarrEnabled, setSonarrEnabled] = useState(false)
+  const [unmonitorSonarr, setUnmonitorSonarr] = useState(true)
 
   useEffect(() => {
     api.getSettings().then((s: Record<string, unknown>) => {
@@ -233,14 +163,14 @@ export default function TVShows() {
     }).finally(() => setLoading(false))
   }, [staleDays, sort, toast])
 
-  const handleDelete = async (unmonitorSonarr: boolean) => {
+  const handleDelete = async () => {
     if (!pendingDelete) return
     setDeleting(true)
     try {
       await api.deleteShow(pendingDelete.plex_rating_key, {
         plex_rating_key: pendingDelete.plex_rating_key,
         title: pendingDelete.title,
-        unmonitor_sonarr: unmonitorSonarr,
+        unmonitor_sonarr: sonarrEnabled && unmonitorSonarr,
       })
       toast(`Deleted "${pendingDelete.title}"`, 'success')
       setPendingDelete(null)
@@ -376,22 +306,57 @@ export default function TVShows() {
               show={show}
               staleDays={staleDays === 9999 ? 0 : staleDays}
               sonarrEnabled={sonarrEnabled}
-              onDelete={setPendingDelete}
+              onDelete={(s) => { setUnmonitorSonarr(true); setPendingDelete(s) }}
             />
           ))}
         </div>
       )}
 
-      {/* Confirm modal */}
-      {pendingDelete && (
-        <ConfirmModal
-          show={pendingDelete}
-          sonarrEnabled={sonarrEnabled}
-          onConfirm={handleDelete}
-          onCancel={() => !deleting && setPendingDelete(null)}
-          deleting={deleting}
-        />
-      )}
+      {/* Confirm dialog */}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete TV Show?"
+        message={
+          pendingDelete
+            ? `This will permanently delete "${pendingDelete.title}" (${fmtSize(pendingDelete.total_size_bytes)}) from your disk and remove it from Plex. This cannot be undone.`
+            : ''
+        }
+        confirmLabel={deleting ? 'Deleting…' : 'Yes, Delete'}
+        destructive
+        loading={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => !deleting && setPendingDelete(null)}
+      >
+        {pendingDelete && (
+          <div className="space-y-2">
+            <div className="space-y-1">
+              <div className="flex justify-between">
+                <span className="text-gray-400">Episodes</span>
+                <span>{pendingDelete.episode_count}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Disk usage</span>
+                <span className="text-red-300 font-medium">{fmtSize(pendingDelete.total_size_bytes)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Last watched</span>
+                <span>{fmtDate(pendingDelete.last_watched_at)}</span>
+              </div>
+            </div>
+            {sonarrEnabled && (
+              <label className="flex items-center gap-3 cursor-pointer select-none pt-2 border-t border-gray-700/50">
+                <input
+                  type="checkbox"
+                  checked={unmonitorSonarr}
+                  onChange={(e) => setUnmonitorSonarr(e.target.checked)}
+                  className="w-4 h-4 accent-brand-green"
+                />
+                <span className="text-sm">Also unmonitor in Sonarr (prevents automatic re-download)</span>
+              </label>
+            )}
+          </div>
+        )}
+      </ConfirmDialog>
     </div>
   )
 }

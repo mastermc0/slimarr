@@ -260,6 +260,111 @@ export interface MaintenanceInsightSignal {
   detail: string
 }
 
+export interface StoragePreflight {
+  purpose: string
+  path: string
+  classification: string
+  matched_prefix?: string | null
+  exists: boolean
+  parent_path?: string | null
+  parent_exists: boolean
+  free_bytes?: number | null
+  required_bytes: number
+  status: string
+  messages: string[]
+}
+
+export interface StorageOperationItem {
+  operation: string
+  purpose: string
+  source_path?: string | null
+  target_path?: string | null
+  source_classification: string
+  target_classification?: string | null
+  status: string
+  bytes_estimated: number
+  messages: string[]
+  error?: string | null
+  started_at?: string | null
+  completed_at?: string | null
+  duration_ms?: number | null
+  job_id?: string | null
+}
+
+export interface StorageOperationsSnapshot {
+  recent: StorageOperationItem[]
+  recent_failures: StorageOperationItem[]
+  recent_failure_window_seconds: number
+  counters: Record<string, number>
+  history_size: number
+  nas_policy: {
+    active_operations: number
+    cooldown_active: boolean
+    cooldown_remaining_seconds: number
+    last_failure?: Record<string, unknown> | null
+    write_bytes_used_24h: number
+    replacements_24h: number
+  }
+  persisted?: {
+    recent: StorageOperationItem[]
+    counters: Record<string, number>
+    history_size: number
+    available: boolean
+    error?: string
+  }
+}
+
+export interface ReplacementRecoveryRecord {
+  id: number
+  download_id?: number | null
+  movie_id?: number | null
+  movie_title?: string | null
+  status: string
+  phase?: string | null
+  original_path?: string | null
+  mapped_path?: string | null
+  target_path?: string | null
+  video_file_path?: string | null
+  storage_path?: string | null
+  recycle_path?: string | null
+  fallback_backup_path?: string | null
+  error_message?: string | null
+  details?: Record<string, unknown> | null
+  created_at?: string | null
+  updated_at?: string | null
+  completed_at?: string | null
+}
+
+export interface ReplacementRecoverySnapshot {
+  status: 'clear' | 'active' | 'recovery_required' | string
+  checked_at: string
+  records: ReplacementRecoveryRecord[]
+}
+
+export interface PersistentJob {
+  id: string
+  kind: string
+  status: string
+  priority: number
+  payload: Record<string, unknown>
+  progress_current: number
+  progress_total: number
+  heartbeat_at?: string | null
+  attempt: number
+  max_attempts: number
+  error_message?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  completed_at?: string | null
+  cancel_requested_at?: string | null
+  events?: Array<Record<string, unknown>>
+}
+
+export interface PersistentJobsSnapshot {
+  jobs: PersistentJob[]
+  active_statuses: string[]
+}
+
 export interface MaintenanceInsightRecommendation {
   priority: 'high' | 'medium' | 'low' | string
   category: string

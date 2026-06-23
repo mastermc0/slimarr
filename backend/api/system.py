@@ -29,19 +29,23 @@ from backend.api.models import (
     PreflightResponse,
     RecyclingBinEmptyResponse,
     RecyclingBinInfoResponse,
+    ReplacementRecoveryResponse,
     SearchDiagnosticsResponse,
     SearchDiagnosticsHistoryResponse,
     SearchTestRequest,
     SearchTestResponse,
+    StorageOperationsResponse,
+    StoragePreflightResponse,
     SystemHealthResponse,
     SystemInfoResponse,
     SystemStatusResponse,
+    TelemetryPurgeResponse,
     UtilitiesMaintenanceInsightsResponse,
     UpdateCheckResponse,
 )
 from backend.auth.dependencies import get_current_user
 from backend.core.orchestrator import get_status, is_running, request_stop
-from backend.database import ActivityLog, DecisionAuditLog, Download, Movie, async_session
+from backend.database import ActivityLog, DecisionAuditLog, Download, Movie, ReplacementRecoveryRecord, async_session
 from backend.scheduler.scheduler import get_scheduler, list_jobs
 from backend.utils.responses import not_found, get_correlation_id
 from backend.version import APP_VERSION
@@ -87,6 +91,11 @@ _recycle_stats_cache: dict[str, Any] | None = None
 _recycle_stats_cache_at = 0.0
 _recycle_stats_lock = asyncio.Lock()
 
+_DUPLICATE_PREVIEW_TTL_SECONDS = 10 * 60.0
+_duplicate_preview_cache: dict[str, Any] | None = None
+_duplicate_preview_cache_at = 0.0
+_duplicate_preview_lock = asyncio.Lock()
+
 
 def invalidate_services_health_cache() -> None:
     """Clear cached integration health after settings changes."""
@@ -117,16 +126,97 @@ def _dir_stats(path: str) -> tuple[int, int]:
     return files_count, total_bytes
 
 
+def _recycle_entries(path: str) -> list[tuple[str, str, int, int]]:
+    """Snapshot recycle entries and sizes in one worker-thread traversal."""
+    entries: list[tuple[str, str, int, int]] = []
+    with os.scandir(path) as iterator:
+        for entry in iterator:
+            try:
+                if entry.is_file(follow_symlinks=False):
+                    try:
+                        size = int(entry.stat(follow_symlinks=False).st_size)
+                    except OSError:
+                        size = 0
+                    entries.append((entry.path, "file", 1, size))
+                elif entry.is_dir(follow_symlinks=False):
+                    files_count, total_bytes = _dir_stats(entry.path)
+                    entries.append((entry.path, "directory", files_count, total_bytes))
+            except OSError:
+                continue
+    return entries
+
+
 def _invalidate_recycle_stats_cache() -> None:
     global _recycle_stats_cache, _recycle_stats_cache_at
     _recycle_stats_cache = None
     _recycle_stats_cache_at = 0.0
 
 
+def _empty_duplicate_preview(status: str = "not_cached", reason: str | None = None) -> dict[str, Any]:
+    return {
+        "status": status,
+        "reason": reason,
+        "movies_scanned": 0,
+        "duplicates_found": 0,
+        "estimated_reclaimable_bytes": 0,
+        "confidence": {"high": 0, "medium": 0, "low": 0},
+        "sample": [],
+        "truncated": False,
+    }
+
+
+async def _duplicate_preview_cached(
+    *,
+    max_movies_per_section: int = 500,
+    force: bool = False,
+    allow_scan: bool = True,
+) -> dict[str, Any]:
+    global _duplicate_preview_cache, _duplicate_preview_cache_at
+
+    max_movies_per_section = max(1, int(max_movies_per_section or 500))
+    now = time.monotonic()
+    cached = _duplicate_preview_cache
+    if (
+        not force
+        and cached
+        and int(cached.get("max_movies_per_section") or 0) >= max_movies_per_section
+        and (now - _duplicate_preview_cache_at) <= _DUPLICATE_PREVIEW_TTL_SECONDS
+    ):
+        return dict(cached.get("payload") or _empty_duplicate_preview())
+
+    if not allow_scan:
+        if cached and int(cached.get("max_movies_per_section") or 0) >= max_movies_per_section:
+            return dict(cached.get("payload") or _empty_duplicate_preview())
+        return _empty_duplicate_preview(
+            reason="Duplicate preview has not been generated yet. Refresh preview to populate maintenance telemetry."
+        )
+
+    async with _duplicate_preview_lock:
+        now = time.monotonic()
+        cached = _duplicate_preview_cache
+        if (
+            not force
+            and cached
+            and int(cached.get("max_movies_per_section") or 0) >= max_movies_per_section
+            and (now - _duplicate_preview_cache_at) <= _DUPLICATE_PREVIEW_TTL_SECONDS
+        ):
+            return dict(cached.get("payload") or _empty_duplicate_preview())
+
+        from backend.core.cleanup import preview_duplicate_cleanup
+
+        payload = await preview_duplicate_cleanup(max_movies_per_section=max_movies_per_section)
+        _duplicate_preview_cache = {
+            "max_movies_per_section": max_movies_per_section,
+            "payload": payload,
+        }
+        _duplicate_preview_cache_at = time.monotonic()
+        return dict(payload)
+
+
 async def _dir_stats_cached(path: str) -> tuple[int, int]:
     global _recycle_stats_cache, _recycle_stats_cache_at
 
-    now = time.time()
+    now = time.monotonic()
     cached = _recycle_stats_cache
     if (
         cached
@@ -136,7 +226,7 @@ async def _dir_stats_cached(path: str) -> tuple[int, int]:
         return int(cached.get("files", 0)), int(cached.get("bytes", 0))
 
     async with _recycle_stats_lock:
-        now = time.time()
+        now = time.monotonic()
         cached = _recycle_stats_cache
         if (
             cached
@@ -189,21 +279,66 @@ def _redact_sensitive(data: Any) -> Any:
     return data
 
 
-def _normalize_path(path: str | None) -> str:
-    return str(path or "").replace("\\", "/").strip().lower().rstrip("/")
+def _redact_path_for_payload(path: str | None) -> str | None:
+    if not path:
+        return path
+    text = str(path)
+    drive, tail = os.path.splitdrive(text)
+    parent, name = os.path.split(tail)
+    if not name:
+        name = parent.strip("\\/") or tail
+    if drive:
+        return os.path.join(drive + os.sep, "...", name)
+    if text.startswith(("\\\\", "//")):
+        return os.path.join("//...", name)
+    if text.startswith(("/", "\\")):
+        return os.path.join(os.sep, "...", name)
+    return os.path.join("...", name)
 
 
-def _path_matches_prefix(path: str | None, prefixes: list[str]) -> bool:
-    norm = _normalize_path(path)
-    if not norm:
-        return False
-    for prefix in prefixes:
-        check = _normalize_path(prefix)
-        if not check:
-            continue
-        if norm == check or norm.startswith(check + "/"):
-            return True
-    return False
+def _decode_json_payload(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _replacement_recovery_payload(record: ReplacementRecoveryRecord, *, redact_paths: bool = True) -> dict[str, Any]:
+    payload = {
+        "id": record.id,
+        "download_id": record.download_id,
+        "movie_id": record.movie_id,
+        "movie_title": record.movie_title,
+        "status": record.status,
+        "phase": record.phase,
+        "original_path": record.original_path,
+        "mapped_path": record.mapped_path,
+        "target_path": record.target_path,
+        "video_file_path": record.video_file_path,
+        "storage_path": record.storage_path,
+        "recycle_path": record.recycle_path,
+        "fallback_backup_path": record.fallback_backup_path,
+        "error_message": record.error_message,
+        "details": _decode_json_payload(record.details),
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+        "updated_at": record.updated_at.isoformat() if record.updated_at else None,
+        "completed_at": record.completed_at.isoformat() if record.completed_at else None,
+    }
+    if redact_paths:
+        for key in (
+            "original_path",
+            "mapped_path",
+            "target_path",
+            "video_file_path",
+            "storage_path",
+            "recycle_path",
+            "fallback_backup_path",
+        ):
+            payload[key] = _redact_path_for_payload(payload.get(key))
+    return payload
 
 
 def _serializable_search_detail(detail: dict[str, Any]) -> dict[str, Any]:
@@ -326,6 +461,15 @@ async def metrics():
             label_str = "{" + ",".join(f'{k}="{v}"' for k, v in labels.items()) + "}"
         lines.append(f"{name}{label_str} {value}")
 
+    def _counter(name: str, value: float | int, labels: dict[str, str] | None = None, help_text: str = "") -> None:
+        if help_text:
+            lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} counter")
+        label_str = ""
+        if labels:
+            label_str = "{" + ",".join(f'{k}="{v}"' for k, v in labels.items()) + "}"
+        lines.append(f"{name}{label_str} {value}")
+
     uptime_seconds = int((datetime.now(timezone.utc) - _start_time).total_seconds())
     _gauge("slimarr_uptime_seconds", uptime_seconds, help_text="Seconds since process start")
 
@@ -333,6 +477,8 @@ async def metrics():
     _gauge("slimarr_info", 1, labels={"version": CURRENT_VERSION, "in_docker": str(is_docker()).lower()}, help_text="Slimarr build info")
 
     try:
+        from backend.database import JobRecord
+
         async with async_session() as db:
             movies_total = (await db.execute(select(func.count()).select_from(Movie))).scalar_one()
             active_downloads = (
@@ -342,8 +488,22 @@ async def metrics():
                     )
                 )
             ).scalar_one()
+            active_jobs = (
+                await db.execute(
+                    select(func.count()).select_from(JobRecord).where(
+                        JobRecord.status.in_(["queued", "running", "cancelling"])
+                    )
+                )
+            ).scalar_one()
+            failed_jobs = (
+                await db.execute(
+                    select(func.count()).select_from(JobRecord).where(JobRecord.status == "failed")
+                )
+            ).scalar_one()
         _gauge("slimarr_movies_total", int(movies_total), help_text="Total movies in the library")
         _gauge("slimarr_downloads_active", int(active_downloads), help_text="Active downloads in queue")
+        _gauge("slimarr_jobs_active", int(active_jobs), help_text="Active persistent jobs")
+        _counter("slimarr_jobs_failed_total", int(failed_jobs), help_text="Failed persistent jobs")
     except Exception:
         pass
 
@@ -361,6 +521,52 @@ async def metrics():
     from backend.core.search_diagnostics import degradation_status
     degraded = degradation_status()
     _gauge("slimarr_search_degraded", 1 if degraded.get("degraded") else 0, help_text="1 if search pipeline is degraded")
+
+    from backend.core.storage import nas_policy_snapshot, storage_operation_metrics
+    storage_metrics = storage_operation_metrics()
+    emitted_storage_operations_help = False
+    emitted_storage_bytes_help = False
+    for operation in ("move", "remove"):
+        for status_name in ("completed", "failed", "skipped"):
+            value = storage_metrics.get(f"{operation}:{status_name}", 0)
+            _counter(
+                "slimarr_storage_operations_total",
+                value,
+                labels={"operation": operation, "status": status_name},
+                help_text=(
+                    "Storage operations by operation and status"
+                    if not emitted_storage_operations_help
+                    else ""
+                ),
+            )
+            emitted_storage_operations_help = True
+        _counter(
+            "slimarr_storage_operation_bytes_total",
+            storage_metrics.get(f"{operation}:bytes_estimated", 0),
+            labels={"operation": operation},
+            help_text=(
+                "Estimated bytes processed by completed storage operations"
+                if not emitted_storage_bytes_help
+                else ""
+            ),
+        )
+        emitted_storage_bytes_help = True
+    _counter(
+        "slimarr_storage_operation_failures_total",
+        storage_metrics.get("move:failed", 0) + storage_metrics.get("remove:failed", 0),
+        help_text="Total failed storage operations",
+    )
+    nas_policy = nas_policy_snapshot(redact_paths=True)
+    _gauge(
+        "slimarr_nas_cooldown_active",
+        1 if nas_policy.get("cooldown_active") else 0,
+        help_text="1 if NAS storage operations are in failure cooldown",
+    )
+    _gauge(
+        "slimarr_nas_storage_operations_active",
+        int(nas_policy.get("active_operations") or 0),
+        help_text="Currently active NAS storage operations",
+    )
 
     from fastapi.responses import PlainTextResponse
     return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
@@ -397,6 +603,7 @@ async def get_system_info(user=Depends(get_current_user)):
         "platform": platform.system(),
         "arch": platform.machine(),
         "db_backend": db_runtime.get("backend") if isinstance(db_runtime, dict) else None,
+        "db_schema_version": db_runtime.get("schema_version") if isinstance(db_runtime, dict) else None,
         "db_pool_checked_out": pool.get("checked_out"),
         "in_docker": is_docker(),
         "container_id": container_id() or "",
@@ -422,6 +629,36 @@ async def diagnostics_bundle(user=Depends(get_current_user)):
     health = await health_matrix(user)
     info = await get_system_info(user)
     search_diag = await search_diagnostics(user)
+    from backend.core.storage import persisted_storage_operation_snapshot, storage_operation_snapshot
+    from backend.core.jobs import get_persistent_job, list_persistent_jobs
+    storage_operations = storage_operation_snapshot(redact_paths=True, limit=200)
+    storage_operations["persisted"] = await persisted_storage_operation_snapshot(
+        redact_paths=True,
+        limit=500,
+    )
+    job_rows = await list_persistent_jobs(status="all", limit=200)
+    job_timeline = []
+    for item in job_rows.get("jobs", []):
+        job_id = item.get("id")
+        if job_id:
+            detail = await get_persistent_job(str(job_id))
+            if detail:
+                job_timeline.append(detail)
+    async with async_session() as db:
+        recovery_rows = (
+            await db.execute(
+                select(ReplacementRecoveryRecord)
+                .order_by(
+                    ReplacementRecoveryRecord.updated_at.desc(),
+                    ReplacementRecoveryRecord.id.desc(),
+                )
+                .limit(200)
+            )
+        ).scalars().all()
+    replacement_recovery = [
+        _replacement_recovery_payload(row, redact_paths=True)
+        for row in recovery_rows
+    ]
 
     with open(os.path.join(payload_dir, "config.redacted.json"), "w", encoding="utf-8") as f:
         json.dump(config_dump, f, indent=2)
@@ -438,6 +675,30 @@ async def diagnostics_bundle(user=Depends(get_current_user)):
     from backend.core.search_diagnostics import history as search_history
     with open(os.path.join(payload_dir, "system.search.diagnostics.history.json"), "w", encoding="utf-8") as f:
         json.dump(search_history(page=1, per_page=500), f, indent=2)
+    with open(os.path.join(payload_dir, "system.storage.operations.json"), "w", encoding="utf-8") as f:
+        json.dump(storage_operations, f, indent=2)
+    with open(os.path.join(payload_dir, "system.jobs.timeline.json"), "w", encoding="utf-8") as f:
+        json.dump(job_timeline, f, indent=2)
+    with open(os.path.join(payload_dir, "system.replacement.recovery.json"), "w", encoding="utf-8") as f:
+        json.dump(replacement_recovery, f, indent=2)
+
+    # NAS path classification summary
+    try:
+        from backend.core.storage import classify_storage_path, nas_policy_snapshot
+        cfg_for_bundle = get_config()
+        nas_prefixes = list(cfg_for_bundle.files.nas_path_prefixes or [])
+        nas_summary: dict[str, Any] = {
+            "nas_path_prefixes": nas_prefixes,
+            "nas_policy": nas_policy_snapshot(redact_paths=True),
+            "path_classifications": {
+                _redact_path_for_payload(p): classify_storage_path(p, cfg_for_bundle).classification
+                for p in nas_prefixes
+            },
+        }
+        with open(os.path.join(payload_dir, "system.nas.classification.json"), "w", encoding="utf-8") as f:
+            json.dump(nas_summary, f, indent=2)
+    except Exception:
+        pass
 
     log_tail = _read_log_tail(os.path.join("data", "logs", "slimarr.log"), max_lines=3000)
     with open(os.path.join(payload_dir, "logs.slimarr.tail.log"), "w", encoding="utf-8") as f:
@@ -513,7 +774,7 @@ async def recycling_bin_info(user=Depends(get_current_user)):
             "bytes": 0,
         }
 
-    exists = os.path.isdir(recycle_path)
+    exists = await asyncio.to_thread(os.path.isdir, recycle_path)
     files_count, total_bytes = await _dir_stats_cached(recycle_path) if exists else (0, 0)
     return {
         "enabled": True,
@@ -527,29 +788,40 @@ async def recycling_bin_info(user=Depends(get_current_user)):
 @router.post("/recycling-bin/empty", response_model=RecyclingBinEmptyResponse)
 async def recycling_bin_empty(user=Depends(get_current_user)):
     """Delete all files/folders inside the configured recycling bin."""
+    from backend.config import get_config
+    from backend.core.storage import remove_path
+
     recycle_path = _get_recycling_bin_path()
     if not recycle_path:
         return {"status": "disabled", "removed_files": 0, "removed_dirs": 0, "freed_bytes": 0}
 
-    if not os.path.isdir(recycle_path):
+    if not await asyncio.to_thread(os.path.isdir, recycle_path):
         return {"status": "not_found", "removed_files": 0, "removed_dirs": 0, "freed_bytes": 0}
 
     removed_files = 0
     removed_dirs = 0
     freed_bytes = 0
 
-    for entry in os.scandir(recycle_path):
+    entries = await asyncio.to_thread(_recycle_entries, recycle_path)
+    for entry_path, entry_kind, files_count, bytes_count in entries:
         try:
-            if entry.is_file(follow_symlinks=False):
-                try:
-                    freed_bytes += os.path.getsize(entry.path)
-                except OSError:
-                    pass
-                os.remove(entry.path)
+            if entry_kind == "file":
+                await remove_path(
+                    entry_path,
+                    get_config(),
+                    purpose="empty_recycling_bin",
+                    estimated_bytes=bytes_count,
+                )
                 removed_files += 1
-            elif entry.is_dir(follow_symlinks=False):
-                files_count, bytes_count = _dir_stats(entry.path)
-                shutil.rmtree(entry.path, ignore_errors=True)
+                freed_bytes += bytes_count
+            elif entry_kind == "directory":
+                await remove_path(
+                    entry_path,
+                    get_config(),
+                    purpose="empty_recycling_bin",
+                    recursive=True,
+                    estimated_bytes=bytes_count,
+                )
                 removed_dirs += 1
                 removed_files += files_count
                 freed_bytes += bytes_count
@@ -733,65 +1005,88 @@ async def list_tasks(user=Depends(get_current_user)):
 
 
 @router.post("/tasks/{task_id}/run", response_model=ActionStatusResponse)
-async def run_task(task_id: str, background: BackgroundTasks, user=Depends(get_current_user)):
+async def run_task(task_id: str, user=Depends(get_current_user)):
     scheduler = get_scheduler()
     job = scheduler.get_job(task_id)
     if not job:
         raise not_found(f"Task '{task_id}'", correlation_id=get_correlation_id())
-    started = await _start_guarded_background_task(f"scheduler:{task_id}", background, job.func)
-    if not started:
-        return {"status": "already_running", "task_id": task_id}
-    return {"status": "triggered", "task_id": task_id}
+    from backend.core.jobs import enqueue_job
+
+    result = await enqueue_job(
+        "scheduler_task",
+        {"task_id": task_id},
+        singleton=False,
+    )
+    return {
+        "status": "triggered",
+        "task_id": task_id,
+        "job_id": result["job"]["id"],
+    }
 
 
 @router.post("/scan", response_model=ActionStatusResponse)
-async def trigger_scan(background: BackgroundTasks, user=Depends(get_current_user)):
+async def trigger_scan(user=Depends(get_current_user)):
     """Trigger a full library scan in the background."""
-    from backend.core.scanner import is_scan_running, scan_library
+    from backend.core.scanner import is_scan_running
     from backend.core.orchestrator import is_running as is_cycle_running
     if is_scan_running() or is_cycle_running():
         return {"status": "already_running"}
-    started = await _start_guarded_background_task("scan_library", background, scan_library)
-    if not started:
+    from backend.core.jobs import enqueue_job
+
+    result = await enqueue_job("manual_scan")
+    if result["already_running"]:
         return {"status": "already_running"}
-    return {"status": "scan_started"}
+    return {"status": "scan_started", "job_id": result["job"]["id"]}
 
 
 @router.post("/cleanup", response_model=ActionStatusResponse)
 async def trigger_cleanup(
-    background: BackgroundTasks,
     confirm: bool = Query(default=False),
     user=Depends(get_current_user),
 ):
     """Trigger a duplicate file cleanup in the library."""
-    from backend.core.cleanup import scan_and_clean_duplicates
-
     if not confirm:
         return {"status": "confirmation_required"}
 
-    started = await _start_guarded_background_task("cleanup_duplicates", background, scan_and_clean_duplicates)
-    if not started:
+    from backend.core.jobs import enqueue_job
+
+    result = await enqueue_job("duplicate_cleanup")
+    if result["already_running"]:
         return {"status": "already_running"}
-    return {"status": "cleanup_started"}
+    return {"status": "cleanup_started", "job_id": result["job"]["id"]}
 
 
 @router.get("/cleanup/preview", response_model=DuplicateCleanupPreviewResponse)
-async def cleanup_preview(user=Depends(get_current_user)):
+async def cleanup_preview(
+    force: bool = Query(default=False),
+    user=Depends(get_current_user),
+):
     """Preview duplicate cleanup impact without deleting any file."""
-    from backend.core.cleanup import preview_duplicate_cleanup
+    if force:
+        from backend.core.jobs import enqueue_job
 
-    return await preview_duplicate_cleanup()
+        result = await enqueue_job(
+            "duplicate_preview",
+            {"force": True},
+            singleton=True,
+        )
+        cached = await _duplicate_preview_cached(allow_scan=False)
+        cached["job_id"] = result["job"]["id"]
+        if cached.get("status") == "not_cached":
+            cached["status"] = "queued"
+            cached["reason"] = "Duplicate preview job queued"
+        return cached
+    return await _duplicate_preview_cached(force=force)
 
 
 @router.get("/utilities/maintenance-insights", response_model=UtilitiesMaintenanceInsightsResponse)
 async def utilities_maintenance_insights(user=Depends(get_current_user)):
     """Return telemetry-aware utility maintenance score and safe recommendations."""
-    from backend.core.cleanup import preview_duplicate_cleanup
     from backend.core.search_diagnostics import degradation_status
 
     health = await health_matrix(user)
     recycle = await recycling_bin_info(user)
-    duplicate_preview = await preview_duplicate_cleanup(max_movies_per_section=250)
+    duplicate_preview = await _duplicate_preview_cached(max_movies_per_section=250, allow_scan=False)
     search_state = degradation_status()
 
     score = 100.0
@@ -833,7 +1128,28 @@ async def utilities_maintenance_insights(user=Depends(get_current_user)):
 
     reclaimable = int(duplicate_preview.get("estimated_reclaimable_bytes") or 0)
     duplicates_found = int(duplicate_preview.get("duplicates_found") or 0)
-    if duplicates_found > 0:
+    duplicate_status = str(duplicate_preview.get("status") or "unknown")
+    if duplicate_status != "ok":
+        signals.append(
+            {
+                "key": "duplicate_media",
+                "state": duplicate_status,
+                "impact": 0,
+                "detail": str(
+                    duplicate_preview.get("reason")
+                    or "Duplicate preview has not been generated yet."
+                ),
+            }
+        )
+        recommendations.append(
+            {
+                "priority": "low",
+                "category": "Storage",
+                "title": "Refresh duplicate preview when needed",
+                "detail": "Duplicate preview is now manual/cached to avoid repeated Plex and NAS scans.",
+            }
+        )
+    elif duplicates_found > 0:
         duplicate_penalty = min(18.0, float(duplicates_found) / 3.0)
         score -= duplicate_penalty
         signals.append(
@@ -923,14 +1239,15 @@ async def utilities_maintenance_insights(user=Depends(get_current_user)):
 
 
 @router.post("/cycle/start", response_model=ActionStatusResponse)
-async def start_cycle(background: BackgroundTasks, user=Depends(get_current_user)):
+async def start_cycle(user=Depends(get_current_user)):
     if is_running():
         return {"status": "already_running"}
-    from backend.core.orchestrator import run_full_cycle
-    started = await _start_guarded_background_task("full_cycle", background, run_full_cycle)
-    if not started:
+    from backend.core.jobs import enqueue_job
+
+    result = await enqueue_job("full_cycle")
+    if result["already_running"]:
         return {"status": "already_running"}
-    return {"status": "started"}
+    return {"status": "started", "job_id": result["job"]["id"]}
 
 
 @router.post("/cycle/stop", response_model=ActionStatusResponse)
@@ -1097,6 +1414,110 @@ async def automation_preflight(user=Depends(get_current_user)):
         "status": overall,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "checks": checks,
+    }
+
+
+@router.get("/storage/preflight", response_model=StoragePreflightResponse)
+async def storage_preflight(
+    path: str = Query(..., min_length=1),
+    required_bytes: int = Query(default=0, ge=0),
+    purpose: str = Query(default="storage_path"),
+    user=Depends(get_current_user),
+):
+    """Run a non-mutating storage/path preflight for future file operations."""
+    from backend.config import get_config
+    from backend.core.storage import preflight_storage_path
+
+    result = await asyncio.to_thread(
+        preflight_storage_path,
+        path,
+        get_config(),
+        required_bytes=required_bytes,
+        purpose=purpose,
+    )
+    return result.to_dict()
+
+
+@router.get("/storage/operations", response_model=StorageOperationsResponse)
+async def storage_operations(
+    limit: int = Query(default=25, ge=1, le=200),
+    user=Depends(get_current_user),
+):
+    """Return recent storage operation telemetry and NAS policy state."""
+    from backend.core.storage import (
+        persisted_storage_operation_snapshot,
+        refresh_nas_policy_usage,
+        storage_operation_snapshot,
+    )
+
+    await refresh_nas_policy_usage()
+    snapshot = storage_operation_snapshot(redact_paths=True, limit=limit)
+    snapshot["persisted"] = await persisted_storage_operation_snapshot(
+        redact_paths=True,
+        limit=limit,
+    )
+    return snapshot
+
+
+@router.post("/telemetry/purge", response_model=TelemetryPurgeResponse)
+async def purge_telemetry(
+    keep_days: int = Query(default=30, ge=1, le=365),
+    user=Depends(get_current_user),
+):
+    """Manually trigger retention cleanup for old job records and storage operation logs.
+
+    Removes terminal job records (and their events) and storage operation log entries
+    that are older than ``keep_days`` days. Active or queued jobs are never removed.
+    """
+    from backend.core.jobs import purge_old_jobs
+    from backend.core.storage import purge_old_storage_operations
+
+    jobs_removed = await purge_old_jobs(keep_days=keep_days)
+    ops_removed = await purge_old_storage_operations(keep_days=keep_days)
+    return {
+        "status": "ok",
+        "keep_days": keep_days,
+        "jobs_removed": jobs_removed,
+        "storage_operations_removed": ops_removed,
+    }
+
+
+@router.get("/replacement-recovery", response_model=ReplacementRecoveryResponse)
+async def replacement_recovery(
+    status: str = Query(default="active"),
+    limit: int = Query(default=25, ge=1, le=200),
+    user=Depends(get_current_user),
+):
+    """Return replacement recovery metadata for interrupted or risky replacements."""
+    active_statuses = {"running", "recovery_required"}
+    async with async_session() as db:
+        query = select(ReplacementRecoveryRecord)
+        if status and status != "all":
+            if status == "active":
+                query = query.where(ReplacementRecoveryRecord.status.in_(active_statuses))
+            else:
+                query = query.where(ReplacementRecoveryRecord.status == status)
+        rows = (
+            await db.execute(
+                query.order_by(
+                    ReplacementRecoveryRecord.updated_at.desc(),
+                    ReplacementRecoveryRecord.id.desc(),
+                ).limit(limit)
+            )
+        ).scalars().all()
+
+    records = [_replacement_recovery_payload(row, redact_paths=True) for row in rows]
+    if any(row.get("status") == "recovery_required" for row in records):
+        overall = "recovery_required"
+    elif records:
+        overall = "active"
+    else:
+        overall = "clear"
+
+    return {
+        "status": overall,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "records": records,
     }
 
 
@@ -1436,8 +1857,8 @@ async def health_matrix(user=Depends(get_current_user)):
     recycle_path = _get_recycling_bin_path()
     if not recycle_path:
         components["recycling_bin"] = {"status": "disabled", "detail": "Not configured"}
-    elif os.path.isdir(recycle_path):
-        files_count, bytes_count = _dir_stats(recycle_path)
+    elif await asyncio.to_thread(os.path.isdir, recycle_path):
+        files_count, bytes_count = await _dir_stats_cached(recycle_path)
         components["recycling_bin"] = {
             "status": "healthy",
             "detail": "Configured",
@@ -1450,6 +1871,145 @@ async def health_matrix(user=Depends(get_current_user)):
             "status": "degraded",
             "detail": "Configured path does not exist",
             "path": recycle_path,
+        }
+
+    try:
+        from backend.core.storage import refresh_nas_policy_usage, storage_operation_snapshot
+
+        await refresh_nas_policy_usage()
+        storage_snapshot = storage_operation_snapshot(redact_paths=True, limit=10)
+        storage_counters = storage_snapshot.get("counters", {})
+        nas_policy = storage_snapshot.get("nas_policy", {})
+        recent_failed = storage_snapshot.get("recent_failures", [])
+        failure_window = int(storage_snapshot.get("recent_failure_window_seconds", 3600) or 3600)
+        failed_total = int(storage_counters.get("move:failed", 0) or 0) + int(
+            storage_counters.get("remove:failed", 0) or 0
+        )
+        if nas_policy.get("cooldown_active"):
+            components["storage_operations"] = {
+                "status": "degraded",
+                "detail": "NAS storage operations are in failure cooldown",
+                "cooldown_remaining_seconds": nas_policy.get("cooldown_remaining_seconds", 0),
+                "active_operations": nas_policy.get("active_operations", 0),
+                "recent_failed": recent_failed[:3],
+                "counters": storage_counters,
+            }
+        elif recent_failed:
+            components["storage_operations"] = {
+                "status": "degraded",
+                "detail": f"{len(recent_failed)} storage operation failure(s) in the last {failure_window // 60} minutes",
+                "active_operations": nas_policy.get("active_operations", 0),
+                "recent_failed": recent_failed[:3],
+                "recent_failure_window_seconds": failure_window,
+                "failed_total": failed_total,
+                "counters": storage_counters,
+            }
+        else:
+            components["storage_operations"] = {
+                "status": "healthy",
+                "detail": "Storage operation guard is ready",
+                "active_operations": nas_policy.get("active_operations", 0),
+                "history_size": storage_snapshot.get("history_size", 0),
+                "write_bytes_used_24h": nas_policy.get("write_bytes_used_24h", 0),
+                "replacements_24h": nas_policy.get("replacements_24h", 0),
+                "counters": storage_counters,
+            }
+    except Exception as exc:
+        components["storage_operations"] = {
+            "status": "down",
+            "detail": f"Storage operation telemetry unavailable: {exc}",
+        }
+
+    try:
+        recovery_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=30)
+        async with async_session() as db:
+            recovery_rows = (
+                await db.execute(
+                    select(ReplacementRecoveryRecord)
+                    .where(ReplacementRecoveryRecord.status.in_(["running", "recovery_required"]))
+                    .order_by(
+                        ReplacementRecoveryRecord.updated_at.desc(),
+                        ReplacementRecoveryRecord.id.desc(),
+                    )
+                    .limit(10)
+                )
+            ).scalars().all()
+        recovery_required = [
+            row for row in recovery_rows if row.status == "recovery_required"
+        ]
+        stale_running = [
+            row
+            for row in recovery_rows
+            if row.status == "running" and row.updated_at and row.updated_at <= recovery_cutoff
+        ]
+        if recovery_required or stale_running:
+            components["replacement_recovery"] = {
+                "status": "degraded",
+                "detail": (
+                    f"{len(recovery_required)} recovery-required, "
+                    f"{len(stale_running)} stale running replacement(s)"
+                ),
+                "records": [
+                    _replacement_recovery_payload(row, redact_paths=True)
+                    for row in (recovery_required + stale_running)[:5]
+                ],
+            }
+        elif recovery_rows:
+            components["replacement_recovery"] = {
+                "status": "healthy",
+                "detail": f"{len(recovery_rows)} replacement operation(s) currently tracked",
+                "records": [
+                    _replacement_recovery_payload(row, redact_paths=True)
+                    for row in recovery_rows[:5]
+                ],
+            }
+        else:
+            components["replacement_recovery"] = {
+                "status": "healthy",
+                "detail": "No replacement recovery issues",
+                "records": [],
+            }
+    except Exception as exc:
+        components["replacement_recovery"] = {
+            "status": "degraded",
+            "detail": f"Replacement recovery metadata unavailable: {exc}",
+        }
+
+    try:
+        from backend.database import JobRecord
+
+        async with async_session() as db:
+            status_rows = (
+                await db.execute(
+                    select(JobRecord.status, func.count(JobRecord.id)).group_by(JobRecord.status)
+                )
+            ).all()
+        job_counts = {str(status): int(count or 0) for status, count in status_rows}
+        failed = job_counts.get("failed", 0)
+        recovery_required = job_counts.get("recovery_required", 0)
+        active = sum(job_counts.get(status, 0) for status in ("queued", "running", "cancelling"))
+        if recovery_required or failed:
+            components["jobs"] = {
+                "status": "degraded",
+                "detail": f"{recovery_required} recovery-required, {failed} failed job(s)",
+                "counts": job_counts,
+            }
+        elif active:
+            components["jobs"] = {
+                "status": "healthy",
+                "detail": f"{active} active persistent job(s)",
+                "counts": job_counts,
+            }
+        else:
+            components["jobs"] = {
+                "status": "healthy",
+                "detail": "No active persistent jobs",
+                "counts": job_counts,
+            }
+    except Exception as exc:
+        components["jobs"] = {
+            "status": "degraded",
+            "detail": f"Persistent job telemetry unavailable: {exc}",
         }
 
     integration_results = await _build_services_health()
@@ -1538,11 +2098,20 @@ async def decision_audit(limit: int = 50, decision: str = "", user=Depends(get_c
 async def nas_pressure(user=Depends(get_current_user)):
     """Summarize recent NAS-targeted write pressure and policy effectiveness."""
     from backend.config import get_config
+    from backend.core.storage import configured_nas_prefixes, is_nas_path
 
     cfg = get_config()
-    nas_prefixes = [str(p).strip() for p in getattr(cfg.files, "nas_path_prefixes", []) if str(p or "").strip()]
+    nas_prefixes = configured_nas_prefixes(cfg)
     min_savings_mb_for_nas = max(0, int(getattr(cfg.comparison, "min_savings_mb_for_nas", 0) or 0))
-    nas_policy_enabled = bool(nas_prefixes and min_savings_mb_for_nas > 0)
+    nas_policy_enabled = bool(
+        nas_prefixes
+        and (
+            min_savings_mb_for_nas > 0
+            or float(getattr(cfg.files, "nas_max_write_gb_per_day", 0) or 0) > 0
+            or int(getattr(cfg.files, "nas_max_replacements_per_day", 0) or 0) > 0
+            or float(getattr(cfg.files, "nas_max_transfer_mbps", 0) or 0) > 0
+        )
+    )
 
     since = datetime.now(timezone.utc) - timedelta(hours=24)
     replacements_24h = 0
@@ -1563,7 +2132,7 @@ async def nas_pressure(user=Depends(get_current_user)):
 
         for row in replacement_rows:
             target_path = row.new_file_path or row.old_file_path
-            if not _path_matches_prefix(target_path, nas_prefixes):
+            if not is_nas_path(target_path, nas_prefixes):
                 continue
             replacements_24h += 1
             replacement_bytes_24h += int(row.new_size or 0)
@@ -1600,13 +2169,13 @@ async def nas_pressure(user=Depends(get_current_user)):
     recommended_preset = "balanced"
     if pressure_state == "high":
         recommended_preset = "gentle"
-    elif pressure_state == "low":
+    elif pressure_state == "low" and not nas_prefixes:
         recommended_preset = "aggressive"
 
     recommendations: list[str] = []
     if not nas_prefixes:
         recommendations.append("Add NAS path prefixes (for example Z:/Movies) in Settings to track network-share pressure accurately.")
-    if not nas_policy_enabled:
+    if min_savings_mb_for_nas <= 0:
         recommendations.append("Enable NAS savings floor by setting Minimum Savings for NAS Paths (MB) above 0.")
     if pressure_state == "high":
         recommendations.append("Apply the Gentle NAS preset to lower scan and write churn during peak periods.")

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { useToast } from '@/components/Toast'
 import TestConnectionButton from '@/components/TestConnectionButton'
+import ConfirmDialog from '@/components/ConfirmDialog'
 import { CheckCircle, Info, Plus, Trash2, XCircle } from 'lucide-react'
 
 interface Indexer {
@@ -42,6 +43,7 @@ export default function Settings() {
   const [recyclingEmptying, setRecyclingEmptying] = useState(false)
   const [capabilities, setCapabilities] = useState<DownloadClientCapabilities | null>(null)
   const [showHelp, setShowHelp] = useState(true)
+  const [showEmptyBinConfirm, setShowEmptyBinConfirm] = useState(false)
 
   const hasUnsaved = settings && savedSettings && JSON.stringify(settings) !== JSON.stringify(savedSettings)
 
@@ -89,6 +91,12 @@ export default function Settings() {
       ['Max quality upgrade size GB', ['comparison', 'max_quality_upgrade_size_gb'], 1, 100],
       ['Max quality upgrade size increase %', ['comparison', 'max_size_increase_percent_for_quality_upgrade'], 0, 1000],
       ['Recycling cleanup days', ['files', 'recycling_bin_cleanup_days'], 1, 3650],
+      ['NAS daily write budget (GB)', ['files', 'nas_max_write_gb_per_day'], 0, 10000],
+      ['NAS daily replacement budget', ['files', 'nas_max_replacements_per_day'], 0, 1000],
+      ['NAS concurrent operations', ['files', 'nas_max_concurrent_operations'], 1, 16],
+      ['NAS failure cooldown (minutes)', ['files', 'nas_failure_cooldown_minutes'], 0, 1440],
+      ['NAS transfer limit (MiB/s)', ['files', 'nas_max_transfer_mbps'], 0, 10000],
+      ['NAS copy chunk size (MiB)', ['files', 'nas_copy_chunk_mb'], 1, 128],
       ['Min cycle interval (minutes)', ['schedule', 'min_cycle_interval_minutes'], 0, 1440],
       ['Max downloads per night', ['schedule', 'max_downloads_per_night'], 1, 1000],
       ['Throttle seconds', ['schedule', 'throttle_seconds'], 0, 86400],
@@ -139,9 +147,11 @@ export default function Settings() {
       toast('Set a recycling bin path first', 'error')
       return
     }
-    const confirmed = window.confirm('Empty recycling bin now? This permanently deletes all files currently in the bin.')
-    if (!confirmed) return
+    setShowEmptyBinConfirm(true)
+  }
 
+  const doEmptyRecyclingBin = async () => {
+    setShowEmptyBinConfirm(false)
     setRecyclingEmptying(true)
     try {
       const result = await api.emptyRecyclingBin()
@@ -748,7 +758,7 @@ export default function Settings() {
           <input
             type="checkbox"
             id="enable_media_probe"
-            checked={!!((settings?.files as Record<string,unknown>)?.enable_media_probe ?? true)}
+            checked={!!((settings?.files as Record<string,unknown>)?.enable_media_probe ?? false)}
             onChange={(e) => set(['files', 'enable_media_probe'], e.target.checked)}
             className="w-4 h-4 accent-brand-green"
           />
@@ -775,6 +785,14 @@ export default function Settings() {
             placeholder="Z:/Movies, /mnt/nas-media/movies"
           />
           <p className="text-xs text-gray-500 mt-1">Used with "Minimum Savings for NAS Paths (MB)" to avoid tiny replacements on network shares.</p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          {field('NAS Daily Write Budget (GB, 0 disables)', ['files', 'nas_max_write_gb_per_day'], 'number')}
+          {field('NAS Replacements per Day (0 disables)', ['files', 'nas_max_replacements_per_day'], 'number')}
+          {field('Maximum Concurrent NAS Operations', ['files', 'nas_max_concurrent_operations'], 'number')}
+          {field('NAS Failure Cooldown (minutes)', ['files', 'nas_failure_cooldown_minutes'], 'number')}
+          {field('NAS Transfer Limit (MiB/s, 0 disables)', ['files', 'nas_max_transfer_mbps'], 'number')}
+          {field('NAS Copy Chunk Size (MiB)', ['files', 'nas_copy_chunk_mb'], 'number')}
         </div>
         <div className="mt-2 bg-gray-800/70 rounded-lg p-3 space-y-3 border border-gray-700">
           <div className="flex items-center justify-between gap-3">
@@ -888,6 +906,16 @@ export default function Settings() {
         {field('Throttle between downloads (seconds)', ['schedule', 'throttle_seconds'], 'number', 'Pause between successful replacements to spread out write load on NAS storage.')}
         {field('Max Active Download Hours', ['schedule', 'max_active_download_hours'], 'number')}
       </section>
+
+      <ConfirmDialog
+        open={showEmptyBinConfirm}
+        title="Empty Recycling Bin?"
+        message={`This permanently deletes all ${recyclingInfo?.files ?? 0} file(s) in the recycling bin. This cannot be undone.`}
+        confirmLabel="Empty Bin"
+        destructive
+        onConfirm={() => { void doEmptyRecyclingBin() }}
+        onCancel={() => setShowEmptyBinConfirm(false)}
+      />
     </div>
   )
 }

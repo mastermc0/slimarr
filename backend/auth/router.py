@@ -11,6 +11,7 @@ from backend.config import get_config
 from backend.core.audit import log_audit_event
 from backend.database import AsyncSession, User, get_db
 from backend.utils.responses import APIException, rate_limited, get_correlation_id
+from loguru import logger
 
 router = APIRouter()
 
@@ -43,8 +44,8 @@ def _check_rate_limit(ip: str) -> None:
                     details={"remaining_seconds": remaining},
                 )
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not schedule lockout audit event: {}", e)
         raise rate_limited(
             message=f"Too many failed login attempts. Try again in {remaining} seconds.",
             details={"remaining_seconds": remaining},

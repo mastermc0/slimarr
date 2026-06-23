@@ -14,6 +14,7 @@ import {
   Container,
   LogOut,
   Coffee,
+  Layers,
 } from 'lucide-react'
 import { auth } from '@/lib/auth'
 import clsx from 'clsx'
@@ -26,6 +27,7 @@ const links = [
   { to: '/queue', icon: Download, label: 'Queue' },
   { to: '/queue/failed', icon: AlertCircle, label: 'Failed Downloads' },
   { to: '/queue/orphaned', icon: AlertCircle, label: 'Orphaned Downloads' },
+  { to: '/system/operations', icon: Layers, label: 'Operations' },
   { to: '/system/search-diagnostics', icon: Radar, label: 'Search Diagnostics' },
   { to: '/system/container', icon: Container, label: 'Container' },
   { to: '/settings/blacklist', icon: ShieldBan, label: 'Blacklist' },
@@ -33,9 +35,17 @@ const links = [
   { to: '/system', icon: Server, label: 'System' },
 ]
 
-export default function Sidebar() {
+interface SidebarProps {
+  className?: string
+  onNavigate?: () => void
+}
+
+export default function Sidebar({ className, onNavigate }: SidebarProps) {
   return (
-    <aside className="flex h-full min-h-0 w-56 flex-col gap-1 border-r border-white/10 bg-[linear-gradient(180deg,#0d1721_0%,#0a121b_100%)] py-6 shadow-2xl shadow-black/40">
+    <aside className={clsx(
+      'flex h-full min-h-0 w-56 flex-col gap-1 border-r border-white/10 bg-[linear-gradient(180deg,#0d1721_0%,#0a121b_100%)] py-6 shadow-2xl shadow-black/40',
+      className,
+    )}>
       {/* Logo */}
       <div className="px-4 mb-6 flex items-center gap-2">
         <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-emerald-300/20 bg-emerald-300/5">
@@ -54,6 +64,7 @@ export default function Sidebar() {
           <NavLink
             key={to}
             to={to}
+            onClick={onNavigate}
             end={to === '/'}
             className={({ isActive }) =>
               clsx(

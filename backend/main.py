@@ -72,6 +72,17 @@ async def lifespan(app: FastAPI):
         from loguru import logger
         logger.critical(f"Database init failed: {exc}")
         raise
+    try:
+        from backend.core.jobs import recover_stale_jobs
+        from loguru import logger
+
+        recovered_jobs = await recover_stale_jobs()
+        if recovered_jobs:
+            logger.warning(f"Marked {recovered_jobs} interrupted job(s) as recovery_required")
+    except Exception as exc:
+        from loguru import logger
+
+        logger.warning(f"Persistent job recovery failed: {exc}")
     start_scheduler()
     asyncio.create_task(_resume_downloads_after_startup())
 
@@ -165,6 +176,7 @@ app.add_middleware(
 from backend.api.activity import router as activity_router
 from backend.api.dashboard import router as dashboard_router
 from backend.api.images import router as images_router
+from backend.api.jobs import router as jobs_router
 from backend.api.library import router as library_router
 from backend.api.queue import router as queue_router
 from backend.api.settings import router as settings_router
@@ -176,6 +188,7 @@ API_PREFIX = "/api/v1"
 
 app.include_router(auth_router, prefix=f"{API_PREFIX}/auth")
 app.include_router(dashboard_router, prefix=API_PREFIX)
+app.include_router(jobs_router, prefix=API_PREFIX)
 app.include_router(library_router, prefix=API_PREFIX)
 app.include_router(activity_router, prefix=API_PREFIX)
 app.include_router(settings_router, prefix=API_PREFIX)

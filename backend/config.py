@@ -5,6 +5,7 @@ Priority: SLIMARR_* environment variables > config.yaml > defaults
 from __future__ import annotations
 import os
 import secrets
+import tempfile
 import yaml
 from typing import Optional
 from pydantic import BaseModel
@@ -116,8 +117,16 @@ class FilesConfig(BaseModel):
     recycling_bin: str = ""   # Empty = delete originals directly (recommended). Set a path to keep copies.
     recycling_bin_cleanup_days: int = 30
     verify_after_download: bool = True
-    enable_media_probe: bool = True
+    enable_media_probe: bool = False
+    nas_probe_enabled: bool = False  # Set true to allow pymediainfo to read NAS-mounted files during scans.
+    media_probe_timeout_seconds: int = 30
     nas_path_prefixes: list[str] = []
+    nas_max_write_gb_per_day: float = 150.0
+    nas_max_replacements_per_day: int = 3
+    nas_max_concurrent_operations: int = 1
+    nas_failure_cooldown_minutes: int = 15
+    nas_max_transfer_mbps: float = 50.0
+    nas_copy_chunk_mb: int = 8
     plex_path_mappings: list[PathMapping] = []
 
 
@@ -240,6 +249,19 @@ def load_config(path: str = "config.yaml") -> SlimarrConfig:
 #   SLIMARR_SONARR_API_KEY    sonarr.api_key
 #   SLIMARR_TMDB_API_KEY      tmdb.api_key
 #   SLIMARR_RECYCLING_BIN     files.recycling_bin
+#   SLIMARR_ENABLE_MEDIA_PROBE files.enable_media_probe
+#   SLIMARR_NAS_PATH_PREFIXES files.nas_path_prefixes (comma-separated)
+#   SLIMARR_NAS_MAX_WRITE_GB_PER_DAY files.nas_max_write_gb_per_day
+#   SLIMARR_NAS_MAX_REPLACEMENTS_PER_DAY files.nas_max_replacements_per_day
+#   SLIMARR_NAS_MAX_CONCURRENT_OPERATIONS files.nas_max_concurrent_operations
+#   SLIMARR_NAS_FAILURE_COOLDOWN_MINUTES files.nas_failure_cooldown_minutes
+#   SLIMARR_NAS_MAX_TRANSFER_MBPS files.nas_max_transfer_mbps
+#   SLIMARR_NAS_COPY_CHUNK_MB files.nas_copy_chunk_mb
+#   SLIMARR_MIN_SAVINGS_MB_FOR_NAS comparison.min_savings_mb_for_nas
+#   SLIMARR_MIN_CYCLE_INTERVAL_MINUTES schedule.min_cycle_interval_minutes
+#   SLIMARR_MAX_DOWNLOADS_PER_NIGHT schedule.max_downloads_per_night
+#   SLIMARR_THROTTLE_SECONDS schedule.throttle_seconds
+#   SLIMARR_MAX_ACTIVE_DOWNLOAD_HOURS schedule.max_active_download_hours
 #   SLIMARR_DOWNLOAD_CLIENT   download_client
 #   SLIMARR_TZ                schedule.timezone  (alias)
 #   TZ                        schedule.timezone  (standard Docker TZ)
@@ -265,6 +287,19 @@ _ENV_MAP: list[tuple[str, list[str]]] = [
     ("SLIMARR_SONARR_API_KEY",   ["sonarr", "api_key"]),
     ("SLIMARR_TMDB_API_KEY",     ["tmdb", "api_key"]),
     ("SLIMARR_RECYCLING_BIN",    ["files", "recycling_bin"]),
+    ("SLIMARR_ENABLE_MEDIA_PROBE", ["files", "enable_media_probe"]),
+    ("SLIMARR_NAS_PATH_PREFIXES", ["files", "nas_path_prefixes"]),
+    ("SLIMARR_NAS_MAX_WRITE_GB_PER_DAY", ["files", "nas_max_write_gb_per_day"]),
+    ("SLIMARR_NAS_MAX_REPLACEMENTS_PER_DAY", ["files", "nas_max_replacements_per_day"]),
+    ("SLIMARR_NAS_MAX_CONCURRENT_OPERATIONS", ["files", "nas_max_concurrent_operations"]),
+    ("SLIMARR_NAS_FAILURE_COOLDOWN_MINUTES", ["files", "nas_failure_cooldown_minutes"]),
+    ("SLIMARR_NAS_MAX_TRANSFER_MBPS", ["files", "nas_max_transfer_mbps"]),
+    ("SLIMARR_NAS_COPY_CHUNK_MB", ["files", "nas_copy_chunk_mb"]),
+    ("SLIMARR_MIN_SAVINGS_MB_FOR_NAS", ["comparison", "min_savings_mb_for_nas"]),
+    ("SLIMARR_MIN_CYCLE_INTERVAL_MINUTES", ["schedule", "min_cycle_interval_minutes"]),
+    ("SLIMARR_MAX_DOWNLOADS_PER_NIGHT", ["schedule", "max_downloads_per_night"]),
+    ("SLIMARR_THROTTLE_SECONDS", ["schedule", "throttle_seconds"]),
+    ("SLIMARR_MAX_ACTIVE_DOWNLOAD_HOURS", ["schedule", "max_active_download_hours"]),
     ("SLIMARR_DOWNLOAD_CLIENT",  ["download_client"]),
 ]
 
@@ -299,6 +334,12 @@ def _set_nested(obj: object, path: list[str], value: str) -> None:
                 coerced: object = int(value)
             elif isinstance(current, float):
                 coerced = float(value)
+            elif isinstance(current, list):
+                coerced = [
+                    item.strip()
+                    for item in value.replace("|", ",").split(",")
+                    if item.strip()
+                ]
             else:
                 coerced = value
             setattr(obj, field, coerced)
@@ -316,8 +357,19 @@ def save_config(config: SlimarrConfig, path: str | None = None) -> None:
     parent = os.path.dirname(os.path.abspath(target))
     if parent:
         os.makedirs(parent, exist_ok=True)
-    with open(target, "w", encoding="utf-8") as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    fd, temporary = tempfile.mkstemp(prefix=".slimarr-config-", suffix=".tmp", dir=parent or ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, target)
+    except Exception:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        raise
 
 
 def ensure_secrets(config: SlimarrConfig, path: str | None = None) -> bool:

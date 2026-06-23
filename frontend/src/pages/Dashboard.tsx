@@ -5,6 +5,7 @@ import StatCard from '@/components/StatCard'
 import ActivityItem from '@/components/ActivityItem'
 import { useToast } from '@/components/Toast'
 import { api } from '@/lib/api'
+import { NAS_PRESETS } from '@/lib/nasPresets'
 import { useSocket } from '@/hooks/useSocket'
 import type { DashboardStats, ActivityEntry, IntegrationMatrix, NasPressure } from '@/lib/types'
 import {
@@ -46,9 +47,18 @@ export default function Dashboard() {
   }, [])
 
   // Live updates via Socket.IO
-  useSocket('scan:completed', reload)
+  useSocket('scan:started', () => setScanning(true))
+  useSocket('scan:completed', () => {
+    setScanning(false)
+    reload()
+  })
   useSocket('replace:completed', reload)
   useSocket('download:progress', () => api.stats().then(setStats).catch(() => {}))
+  useSocket('orchestrator:status', (payload) => {
+    const state = payload as { running?: boolean }
+    setCycling(Boolean(state.running))
+    if (!state.running) reload()
+  })
 
   const { toast } = useToast()
 
@@ -57,8 +67,10 @@ export default function Dashboard() {
     try {
       await api.startCycle()
       toast('Automation cycle started', 'success')
-    } catch { toast('Failed to start cycle', 'error') }
-    setTimeout(() => { reload(); setCycling(false) }, 2000)
+    } catch {
+      setCycling(false)
+      toast('Failed to start cycle', 'error')
+    }
   }
 
   const scanLibrary = async () => {
@@ -66,29 +78,14 @@ export default function Dashboard() {
     try {
       await api.scanLibrary()
       toast('Library scan started — this may take a minute', 'info')
-    } catch { toast('Failed to start scan', 'error') }
-    setTimeout(() => { reload(); setScanning(false) }, 8000)
+    } catch {
+      setScanning(false)
+      toast('Failed to start scan', 'error')
+    }
   }
 
   const applyNasPreset = async (preset: 'gentle' | 'balanced') => {
     setPresetApplying(preset)
-    const presets: Record<string, { min_cycle_interval_minutes: number; max_downloads_per_night: number; throttle_seconds: number; min_savings_mb_for_nas: number; enable_media_probe: boolean }> = {
-      gentle: {
-        min_cycle_interval_minutes: 240,
-        max_downloads_per_night: 2,
-        throttle_seconds: 90,
-        min_savings_mb_for_nas: 700,
-        enable_media_probe: false,
-      },
-      balanced: {
-        min_cycle_interval_minutes: 180,
-        max_downloads_per_night: 3,
-        throttle_seconds: 60,
-        min_savings_mb_for_nas: 500,
-        enable_media_probe: false,
-      },
-    }
-
     try {
       const settings = await api.getSettings() as Record<string, unknown>
       const currentSchedule = (settings.schedule as Record<string, unknown> | undefined) ?? {}
@@ -108,6 +105,9 @@ export default function Dashboard() {
           files: {
             enable_media_probe: currentFiles.enable_media_probe,
             nas_path_prefixes: currentFiles.nas_path_prefixes,
+            nas_max_write_gb_per_day: currentFiles.nas_max_write_gb_per_day,
+            nas_max_replacements_per_day: currentFiles.nas_max_replacements_per_day,
+            nas_max_transfer_mbps: currentFiles.nas_max_transfer_mbps,
           },
         })
       )
@@ -116,16 +116,17 @@ export default function Dashboard() {
       const schedule = (next.schedule as Record<string, unknown> | undefined) ?? {}
       const comparison = (next.comparison as Record<string, unknown> | undefined) ?? {}
       const files = (next.files as Record<string, unknown> | undefined) ?? {}
-      const p = presets[preset]
+      const p = NAS_PRESETS[preset]
+      const hasNasPrefixes = ((files.nas_path_prefixes as string[] | undefined) ?? []).length > 0
 
       schedule.min_cycle_interval_minutes = p.min_cycle_interval_minutes
       schedule.max_downloads_per_night = p.max_downloads_per_night
       schedule.throttle_seconds = p.throttle_seconds
       comparison.min_savings_mb_for_nas = p.min_savings_mb_for_nas
       files.enable_media_probe = p.enable_media_probe
-      if (!((files.nas_path_prefixes as string[] | undefined) ?? []).length) {
-        files.nas_path_prefixes = ['Z:/']
-      }
+      files.nas_max_write_gb_per_day = p.nas_max_write_gb_per_day
+      files.nas_max_replacements_per_day = p.nas_max_replacements_per_day
+      files.nas_max_transfer_mbps = p.nas_max_transfer_mbps
 
       next.schedule = schedule
       next.comparison = comparison
@@ -134,6 +135,9 @@ export default function Dashboard() {
       await api.updateSettings(next)
       setHasPresetSnapshot(true)
       toast(`Applied ${preset} NAS profile`, 'success')
+      if (!hasNasPrefixes) {
+        toast('Add your real NAS path in Settings to activate these limits', 'info')
+      }
       reload()
     } catch {
       toast('Failed to apply NAS profile', 'error')

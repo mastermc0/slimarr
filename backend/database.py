@@ -5,6 +5,7 @@ Database: SQLite via aiosqlite.
 from __future__ import annotations
 
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -302,6 +303,111 @@ class DecisionAuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 
+class StorageOperationLog(Base):
+    __tablename__ = "storage_operations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    operation_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    purpose: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    source_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    target_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    source_classification: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    target_classification: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    estimated_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    actual_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    messages: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    job_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class StoragePathHealth(Base):
+    __tablename__ = "storage_path_health"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    path_prefix: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    classification: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    last_success_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_failure_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    cooldown_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class ReplacementRecoveryRecord(Base):
+    __tablename__ = "replacement_recovery"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    download_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    movie_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    movie_title: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="running", index=True)
+    phase: Mapped[str] = mapped_column(String, default="initialized", index=True)
+    original_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    mapped_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    target_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    video_file_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    storage_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    recycle_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    fallback_backup_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+
+
+class JobRecord(Base):
+    __tablename__ = "jobs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String, default="queued", index=True)
+    priority: Mapped[int] = mapped_column(Integer, default=100, index=True)
+    payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    progress_current: Mapped[int] = mapped_column(Integer, default=0)
+    progress_total: Mapped[int] = mapped_column(Integer, default=1)
+    heartbeat_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=1)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    cancel_requested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    events: Mapped[list[JobEvent]] = relationship(
+        back_populates="job", cascade="all, delete-orphan"
+    )
+
+
+class JobEvent(Base):
+    __tablename__ = "job_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), nullable=False, index=True)
+    event: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    job: Mapped[JobRecord] = relationship(back_populates="events")
+
+
 async def init_db() -> None:
     """Create all tables if they don't exist.
 
@@ -348,7 +454,22 @@ async def init_db() -> None:
         raise last_error
 
 
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _assert_safe_identifier(name: str) -> str:
+    """Guard against SQL injection if a table/column name ever stops being a literal.
+
+    These migration helpers only ever receive hardcoded names today, but they build
+    DDL via f-strings, so this is a defense-in-depth check rather than a no-op.
+    """
+    if not _SAFE_IDENTIFIER_RE.match(name):
+        raise ValueError(f"Unsafe SQL identifier: {name!r}")
+    return name
+
+
 async def _table_columns(conn, table_name: str) -> set[str]:
+    _assert_safe_identifier(table_name)
     backend = get_db_backend()
     if backend == "sqlite":
         rows = await conn.exec_driver_sql(f"PRAGMA table_info({table_name})")
@@ -375,10 +496,17 @@ async def _add_column_if_missing(
     if column_name in existing_columns:
         return
 
+    _assert_safe_identifier(table_name)
+    _assert_safe_identifier(column_name)
     await conn.exec_driver_sql(
         f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"
     )
     existing_columns.add(column_name)
+
+
+# Current migration generation - increment whenever a new migration step is added
+# to _run_lightweight_migrations().  Used in diagnostics bundle.
+SCHEMA_VERSION = 3
 
 
 async def _run_lightweight_migrations(conn) -> None:
@@ -445,6 +573,38 @@ async def _run_lightweight_migrations(conn) -> None:
         "CREATE INDEX IF NOT EXISTS ix_movies_quality_intent "
         "ON movies (quality_intent)"
     )
+    await conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_storage_operations_completed_status "
+        "ON storage_operations (completed_at, status)"
+    )
+    await conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_storage_operations_classification_status "
+        "ON storage_operations (source_classification, status)"
+    )
+    await conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_storage_path_health_classification_failure "
+        "ON storage_path_health (classification, last_failure_at)"
+    )
+    await conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_replacement_recovery_status_updated "
+        "ON replacement_recovery (status, updated_at)"
+    )
+    await conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_replacement_recovery_download_status "
+        "ON replacement_recovery (download_id, status)"
+    )
+    await conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_jobs_status_priority_created "
+        "ON jobs (status, priority, created_at)"
+    )
+    await conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_jobs_kind_status_created "
+        "ON jobs (kind, status, created_at)"
+    )
+    await conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_job_events_job_created "
+        "ON job_events (job_id, created_at)"
+    )
 
 
 def database_runtime_info() -> dict[str, object]:
@@ -453,6 +613,7 @@ def database_runtime_info() -> dict[str, object]:
     info: dict[str, object] = {
         "backend": backend,
         "url_driver": DATABASE_URL.split("://", 1)[0],
+        "schema_version": SCHEMA_VERSION,
         "pool": {
             "size": getattr(engine.sync_engine.pool, "size", lambda: None)(),
             "checked_in": getattr(engine.sync_engine.pool, "checkedin", lambda: None)(),

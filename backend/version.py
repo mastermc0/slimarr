@@ -1,3 +1,3 @@
 """Slimarr application version metadata."""
 
-APP_VERSION = "1.6.1.0"
+APP_VERSION = "1.7.0.0"

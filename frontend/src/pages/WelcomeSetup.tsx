@@ -2,41 +2,16 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { auth } from '@/lib/auth'
+import { NAS_PRESETS, type NasPresetName } from '@/lib/nasPresets'
 import { useToast } from '@/components/Toast'
 import { CheckCircle2, Rocket, SlidersHorizontal } from 'lucide-react'
-
-type Preset = 'gentle' | 'balanced' | 'aggressive'
 
 export default function WelcomeSetup() {
   const navigate = useNavigate()
   const { toast } = useToast()
-  const [nasPrefix, setNasPrefix] = useState('Z:/')
-  const [preset, setPreset] = useState<Preset>('balanced')
+  const [nasPrefix, setNasPrefix] = useState('')
+  const [preset, setPreset] = useState<NasPresetName>('balanced')
   const [saving, setSaving] = useState(false)
-
-  const presets: Record<Preset, { min_cycle_interval_minutes: number; max_downloads_per_night: number; throttle_seconds: number; min_savings_mb_for_nas: number; enable_media_probe: boolean }> = {
-    gentle: {
-      min_cycle_interval_minutes: 240,
-      max_downloads_per_night: 2,
-      throttle_seconds: 90,
-      min_savings_mb_for_nas: 700,
-      enable_media_probe: false,
-    },
-    balanced: {
-      min_cycle_interval_minutes: 180,
-      max_downloads_per_night: 3,
-      throttle_seconds: 60,
-      min_savings_mb_for_nas: 500,
-      enable_media_probe: false,
-    },
-    aggressive: {
-      min_cycle_interval_minutes: 120,
-      max_downloads_per_night: 5,
-      throttle_seconds: 30,
-      min_savings_mb_for_nas: 250,
-      enable_media_probe: true,
-    },
-  }
 
   const completeSetup = async () => {
     setSaving(true)
@@ -46,16 +21,19 @@ export default function WelcomeSetup() {
       const schedule = (next.schedule as Record<string, unknown> | undefined) ?? {}
       const comparison = (next.comparison as Record<string, unknown> | undefined) ?? {}
       const files = (next.files as Record<string, unknown> | undefined) ?? {}
-      const p = presets[preset]
+      const p = NAS_PRESETS[preset]
 
       schedule.min_cycle_interval_minutes = p.min_cycle_interval_minutes
       schedule.max_downloads_per_night = p.max_downloads_per_night
       schedule.throttle_seconds = p.throttle_seconds
       comparison.min_savings_mb_for_nas = p.min_savings_mb_for_nas
       files.enable_media_probe = p.enable_media_probe
+      files.nas_max_write_gb_per_day = p.nas_max_write_gb_per_day
+      files.nas_max_replacements_per_day = p.nas_max_replacements_per_day
+      files.nas_max_transfer_mbps = p.nas_max_transfer_mbps
 
       const prefixes = String(nasPrefix || '').trim()
-      files.nas_path_prefixes = prefixes ? [prefixes] : ['Z:/']
+      files.nas_path_prefixes = prefixes ? [prefixes] : []
 
       next.schedule = schedule
       next.comparison = comparison
@@ -86,14 +64,15 @@ export default function WelcomeSetup() {
 
         <div className="mt-6 space-y-5">
           <div>
-            <label className="block text-xs text-gray-400 mb-1">NAS movie path prefix</label>
+            <label htmlFor="welcome-nas-prefix" className="block text-xs text-gray-400 mb-1">NAS movie path prefix</label>
             <input
+              id="welcome-nas-prefix"
               value={nasPrefix}
               onChange={(e) => setNasPrefix(e.target.value)}
               className="w-full bg-gray-800 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-green"
               placeholder="Z:/Movies"
             />
-            <p className="mt-1 text-xs text-gray-500">Example: Z:/Movies or /mnt/nas-media/movies</p>
+            <p className="mt-1 text-xs text-gray-500">Optional. Use the real mapped or UNC path; Slimarr will not guess one.</p>
           </div>
 
           <div>

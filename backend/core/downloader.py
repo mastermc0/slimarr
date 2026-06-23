@@ -10,6 +10,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from backend.config import get_config
+from backend.core.storage import remove_path
 from backend.database import Download, Movie, SearchResult, UploaderStats, async_session
 from backend.integrations.download_client import decode_job_id, encode_job_id, get_active_download_client_name, get_download_client
 from backend.core.parser import parse_release_title
@@ -323,9 +324,6 @@ async def cleanup_failed_download(download_id: int) -> dict:
         "error_reason": str | None,
     }
     """
-    import os
-    import shutil
-
     async with async_session() as db:
         dl_result = await db.execute(select(Download).where(Download.id == download_id))
         dl = dl_result.scalar_one_or_none()
@@ -347,14 +345,16 @@ async def cleanup_failed_download(download_id: int) -> dict:
         folder_deleted = False
         if dl.storage_path:
             try:
-                if os.path.isdir(dl.storage_path):
-                    shutil.rmtree(dl.storage_path, ignore_errors=True)
-                    logger.info(f"Cleaned up failed download folder: {dl.storage_path}")
-                    folder_deleted = True
-                elif os.path.isfile(dl.storage_path):
-                    os.remove(dl.storage_path)
-                    logger.info(f"Cleaned up failed download file: {dl.storage_path}")
-                    folder_deleted = True
+                result = await remove_path(
+                    dl.storage_path,
+                    get_config(),
+                    purpose="failed_download_cleanup",
+                    recursive=True,
+                )
+                folder_deleted = result.status in {"completed", "skipped"}
+                logger.info(
+                    f"Cleaned up failed download path: {dl.storage_path} ({result.status})"
+                )
             except Exception as e:
                 logger.warning(f"Failed to delete {dl.storage_path}: {e}")
 

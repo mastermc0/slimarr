@@ -326,6 +326,17 @@ if ($code -ne 0) {
 }
 Write-Ok "Python dependencies installed"
 
+if ($IsWindows -or $env:OS -eq "Windows_NT") {
+    Write-Step "Installing system tray dependencies (Windows)"
+    $trayRequirements = Join-Path $Root "requirements-tray.txt"
+    $trayCode = Invoke-LoggedNative { & $VenvPython -m pip install -r $trayRequirements -q }
+    if ($trayCode -ne 0) {
+        Write-Host "    Tray dependencies failed to install; the tray icon will be unavailable, but the web UI will still work." -ForegroundColor Yellow
+    } else {
+        Write-Ok "Tray dependencies installed"
+    }
+}
+
 if (-not $SkipFrontend) {
     Write-Step "Building frontend"
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {

@@ -10,6 +10,7 @@ from typing import Any, Optional
 from backend.config import get_config
 from backend.database import get_db_backend
 from backend.core.media_health import score_local_media_health, score_release_health
+from backend.core.storage import configured_nas_prefixes, is_nas_path
 from backend.core.parser import (
     get_codec_rank,
     get_resolution_rank,
@@ -114,19 +115,6 @@ def _override_string_list(overrides: dict[str, Any], key: str) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).lower().strip() for item in value if str(item).strip()]
-
-
-def _is_nas_path(path: str, configured_prefixes: list[str]) -> bool:
-    if not path:
-        return False
-    norm_path = path.replace("\\", "/").lower().rstrip("/")
-    for prefix in configured_prefixes:
-        norm_prefix = str(prefix or "").replace("\\", "/").lower().rstrip("/")
-        if not norm_prefix:
-            continue
-        if norm_path == norm_prefix or norm_path.startswith(norm_prefix + "/"):
-            return True
-    return False
 
 
 _PRIORITY_ALIASES = {
@@ -483,9 +471,9 @@ def compare_release(
 
     # Optional NAS-specific absolute savings floor to avoid tiny churn replacements
     # on network-mounted libraries.
-    nas_prefixes = [p for p in getattr(config.files, "nas_path_prefixes", []) if str(p or "").strip()]
+    nas_prefixes = configured_nas_prefixes(config)
     min_savings_mb_for_nas = max(0, int(getattr(config.comparison, "min_savings_mb_for_nas", 0) or 0))
-    if min_savings_mb_for_nas > 0 and _is_nas_path(local_file_path, nas_prefixes):
+    if min_savings_mb_for_nas > 0 and is_nas_path(local_file_path, nas_prefixes):
         min_savings_bytes_for_nas = min_savings_mb_for_nas * 1_048_576
         if savings_bytes < min_savings_bytes_for_nas:
             return _reject(

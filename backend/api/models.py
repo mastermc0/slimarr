@@ -10,6 +10,7 @@ class ActionStatusResponse(BaseModel):
     status: str
     movie_id: int | None = None
     task_id: str | None = None
+    job_id: str | None = None
     search_result_id: int | None = None
 
 
@@ -254,6 +255,7 @@ class SystemInfoResponse(BaseModel):
     platform: str
     arch: str | None = None
     db_backend: str | None = None
+    db_schema_version: int | None = None
     db_pool_checked_out: int | None = None
     in_docker: bool | None = None
     container_id: str | None = None
@@ -298,6 +300,7 @@ class DuplicateCleanupSampleItem(BaseModel):
 class DuplicateCleanupPreviewResponse(BaseModel):
     status: str
     reason: str | None = None
+    job_id: str | None = None
     movies_scanned: int
     duplicates_found: int
     estimated_reclaimable_bytes: int
@@ -343,6 +346,73 @@ class PreflightResponse(BaseModel):
     status: str
     checked_at: str
     checks: list[PreflightCheckItem]
+
+
+class StoragePreflightResponse(BaseModel):
+    purpose: str
+    path: str
+    classification: str
+    matched_prefix: str | None = None
+    exists: bool
+    parent_path: str | None = None
+    parent_exists: bool
+    free_bytes: int | None = None
+    required_bytes: int
+    status: str
+    messages: list[str] = Field(default_factory=list)
+
+
+class StorageOperationsResponse(BaseModel):
+    recent: list[dict[str, Any]]
+    recent_failures: list[dict[str, Any]] = Field(default_factory=list)
+    recent_failure_window_seconds: int = 3600
+    counters: dict[str, int]
+    history_size: int
+    nas_policy: dict[str, Any]
+    persisted: dict[str, Any] = Field(default_factory=dict)
+
+
+class TelemetryPurgeResponse(BaseModel):
+    status: str
+    keep_days: int
+    jobs_removed: int
+    storage_operations_removed: int
+
+
+class ReplacementRecoveryResponse(BaseModel):
+    status: str
+    checked_at: str
+    records: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class JobsListResponse(BaseModel):
+    jobs: list[dict[str, Any]]
+    active_statuses: list[str] = Field(default_factory=list)
+
+
+class JobDetailResponse(BaseModel):
+    id: str
+    kind: str
+    status: str
+    priority: int
+    payload: dict[str, Any] = Field(default_factory=dict)
+    progress_current: int
+    progress_total: int
+    heartbeat_at: str | None = None
+    attempt: int
+    max_attempts: int
+    error_message: str | None = None
+    created_at: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    cancel_requested_at: str | None = None
+    events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class JobActionResponse(BaseModel):
+    status: str
+    job: dict[str, Any] | None = None
+    retried_job: dict[str, Any] | None = None
 
 
 class IntegrationMatrixResponse(BaseModel):

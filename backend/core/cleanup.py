@@ -7,13 +7,14 @@ or highest resolution if different), and deletes the inferior files.
 """
 from __future__ import annotations
 
+import asyncio
 import os
-import shutil
 from typing import Any
 from loguru import logger
 
 from backend.config import get_config
 from backend.core.parser import get_codec_rank, get_resolution_rank
+from backend.core.storage import move_path, remove_path
 
 
 def _part_score(p: dict) -> tuple:
@@ -111,7 +112,7 @@ async def preview_duplicate_cleanup(max_movies_per_section: int = 500) -> dict[s
                 break
 
             summary["movies_scanned"] += 1
-            movie_parts = _collect_movie_parts(plex_movie)
+            movie_parts = await asyncio.to_thread(_collect_movie_parts, plex_movie)
             if len(movie_parts) <= 1:
                 continue
 
@@ -189,7 +190,7 @@ async def scan_and_clean_duplicates() -> dict:
         for plex_movie in section.all():
             summary["movies_scanned"] += 1
 
-            movie_parts = _collect_movie_parts(plex_movie)
+            movie_parts = await asyncio.to_thread(_collect_movie_parts, plex_movie)
 
             if len(movie_parts) <= 1:
                 continue
@@ -214,23 +215,31 @@ async def scan_and_clean_duplicates() -> dict:
                     file_size = inf["size"]
 
                     if config.files.recycling_bin:
-                        os.makedirs(config.files.recycling_bin, exist_ok=True)
+                        await asyncio.to_thread(
+                            os.makedirs, config.files.recycling_bin, exist_ok=True
+                        )
                         # Use a unique name to avoid collisions between movies
                         base = os.path.basename(file_path)
                         recycle_dest = os.path.join(config.files.recycling_bin, base)
-                        if os.path.exists(recycle_dest):
+                        if await asyncio.to_thread(os.path.exists, recycle_dest):
                             name, ext = os.path.splitext(base)
                             recycle_dest = os.path.join(
                                 config.files.recycling_bin,
                                 f"{name}_{plex_movie.ratingKey}{ext}",
                             )
-                        shutil.move(file_path, recycle_dest)
+                        await move_path(
+                            file_path,
+                            recycle_dest,
+                            config,
+                            purpose="duplicate_cleanup_recycle",
+                            required_bytes=file_size,
+                        )
                         logger.info(
                             f"Recycled inferior duplicate: {file_path} → {recycle_dest} "
                             f"(Res: {inf['resolution']}, Size: {file_size / 1024**2:.0f} MB)"
                         )
                     else:
-                        os.remove(file_path)
+                        await remove_path(file_path, config, purpose="duplicate_cleanup_delete")
                         logger.info(
                             f"Deleted inferior duplicate: {file_path} "
                             f"(Res: {inf['resolution']}, Size: {file_size / 1024**2:.0f} MB)"

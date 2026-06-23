@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react'
+import { ShieldOff } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useToast } from '@/components/Toast'
+import ConfirmDialog from '@/components/ConfirmDialog'
+import EmptyState from '@/components/EmptyState'
+import { SkeletonTable } from '@/components/Skeleton'
 import type { BlacklistEntry } from '@/lib/types'
 
 export default function BlacklistManagement() {
@@ -8,6 +12,8 @@ export default function BlacklistManagement() {
   const [releaseTitle, setReleaseTitle] = useState('')
   const [reason, setReason] = useState('manual')
   const [loading, setLoading] = useState(true)
+  const [pendingRemove, setPendingRemove] = useState<BlacklistEntry | null>(null)
+  const [removing, setRemoving] = useState(false)
   const { toast } = useToast()
 
   const load = async () => {
@@ -44,13 +50,18 @@ export default function BlacklistManagement() {
     }
   }
 
-  const removeEntry = async (hash: string) => {
+  const removeEntry = async () => {
+    if (!pendingRemove) return
+    setRemoving(true)
     try {
-      await api.removeBlacklistEntry(hash)
+      await api.removeBlacklistEntry(pendingRemove.release_hash)
       toast('Blacklist entry removed', 'success')
+      setPendingRemove(null)
       await load()
     } catch {
       toast('Failed to remove blacklist entry', 'error')
+    } finally {
+      setRemoving(false)
     }
   }
 
@@ -85,9 +96,16 @@ export default function BlacklistManagement() {
           Entries ({entries.length})
         </div>
         {loading ? (
-          <p className="px-4 py-6 text-sm text-gray-400">Loading...</p>
+          <div className="px-4 py-3">
+            <SkeletonTable rows={4} />
+          </div>
         ) : entries.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-gray-400">No blacklist entries.</p>
+          <EmptyState
+            icon={ShieldOff}
+            title="No blacklist entries"
+            description="Releases you blacklist will appear here and be skipped by future searches."
+            compact
+          />
         ) : (
           <div className="divide-y divide-gray-800">
             {entries.map((e) => (
@@ -97,7 +115,7 @@ export default function BlacklistManagement() {
                   <p className="text-xs text-gray-400">{e.reason || 'n/a'}</p>
                 </div>
                 <button
-                  onClick={() => removeEntry(e.release_hash)}
+                  onClick={() => setPendingRemove(e)}
                   className="px-3 py-1 rounded bg-red-700 hover:bg-red-600 text-xs"
                 >
                   Remove
@@ -107,6 +125,21 @@ export default function BlacklistManagement() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={pendingRemove !== null}
+        title="Remove Blacklist Entry?"
+        message={
+          pendingRemove
+            ? `"${pendingRemove.release_title}" will become eligible for search and download again.`
+            : ''
+        }
+        confirmLabel={removing ? 'Removing…' : 'Remove'}
+        destructive
+        loading={removing}
+        onConfirm={removeEntry}
+        onCancel={() => !removing && setPendingRemove(null)}
+      />
     </div>
   )
 }

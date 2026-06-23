@@ -3,6 +3,7 @@ import { api } from '@/lib/api'
 import { useSocket } from '@/hooks/useSocket'
 import type { Download } from '@/lib/types'
 import { Clock, RefreshCw } from 'lucide-react'
+import { SkeletonTable } from '@/components/Skeleton'
 import { useToast } from '@/components/Toast'
 
 function fmt(bytes?: number) {
@@ -111,7 +112,7 @@ export default function Queue() {
         <div>
           <h1 className="text-2xl font-bold">Queue</h1>
           <p className="text-xs text-gray-500 mt-1">
-            {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : loading ? 'Loading queue...' : 'Queue not refreshed yet'}
+            {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : loading ? 'Loading queue…' : 'Queue not refreshed yet'}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -153,7 +154,9 @@ export default function Queue() {
         <div className="px-4 py-3 border-b border-gray-800 text-sm font-semibold">
           Active Downloads ({active.length})
         </div>
-        {active.length === 0 ? (
+        {loading && active.length === 0 ? (
+          <div className="p-4"><SkeletonTable rows={2} /></div>
+        ) : active.length === 0 ? (
           <p className="px-4 py-4 text-gray-500 text-sm">No active downloads.</p>
         ) : (
           <div className="divide-y divide-gray-800">

@@ -1,6 +1,4 @@
 """Orphan scanner - find downloads in downloader but not in Slimarr DB."""
-import os
-import shutil
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -8,6 +6,7 @@ from sqlalchemy import select
 from backend.database import async_session, Download, OrphanedDownload
 from backend.config import get_config
 from backend.core.search_diagnostics import redact_text
+from backend.core.storage import remove_path
 from backend.integrations.download_client import encode_job_id, get_download_client
 from loguru import logger
 
@@ -224,12 +223,13 @@ async def cleanup_orphaned_download(orphan_id: int) -> tuple[bool, Optional[str]
 
         if storage_path:
             try:
-                if os.path.isdir(storage_path):
-                    shutil.rmtree(storage_path, ignore_errors=False)
-                    folder_deleted = True
-                elif os.path.isfile(storage_path):
-                    os.remove(storage_path)
-                    folder_deleted = True
+                result = await remove_path(
+                    storage_path,
+                    get_config(),
+                    purpose="orphan_download_cleanup",
+                    recursive=True,
+                )
+                folder_deleted = result.status in {"completed", "skipped"}
             except Exception as e:
                 logger.warning(
                     "Failed to delete orphan path '{}': {}",
@@ -272,10 +272,12 @@ async def auto_cleanup_old_orphans(days_old: int = 7) -> int:
         for orphan in orphans:
             if orphan.storage_path:
                 try:
-                    if os.path.isdir(orphan.storage_path):
-                        shutil.rmtree(orphan.storage_path, ignore_errors=False)
-                    elif os.path.isfile(orphan.storage_path):
-                        os.remove(orphan.storage_path)
+                    await remove_path(
+                        orphan.storage_path,
+                        get_config(),
+                        purpose="old_orphan_auto_cleanup",
+                        recursive=True,
+                    )
                 except Exception as e:
                     logger.warning(
                         "Failed to delete orphan path '{}': {}",

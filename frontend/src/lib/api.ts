@@ -113,6 +113,19 @@ export const api = {
   healthMatrix: () => client.get('/system/health/matrix').then((r) => r.data),
   nasPressure: () => client.get('/system/nas-pressure').then((r) => r.data),
   preflight: () => client.get('/system/preflight').then((r) => r.data),
+  storagePreflight: (params: { path: string; required_bytes?: number; purpose?: string }) =>
+    client.get('/system/storage/preflight', { params }).then((r) => r.data),
+  storageOperations: (params?: { limit?: number }) =>
+    client.get('/system/storage/operations', { params }).then((r) => r.data),
+  replacementRecovery: (params?: { status?: 'active' | 'running' | 'recovery_required' | 'failed' | 'completed' | 'all'; limit?: number }) =>
+    client.get('/system/replacement-recovery', { params }).then((r) => r.data),
+  jobs: (params?: { status?: 'active' | 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'recovery_required' | 'all'; kind?: string; limit?: number }) =>
+    client.get('/jobs', { params }).then((r) => r.data),
+  job: (jobId: string) => client.get(`/jobs/${jobId}`).then((r) => r.data),
+  cancelJob: (jobId: string) => client.post(`/jobs/${jobId}/cancel`).then((r) => r.data),
+  retryJob: (jobId: string) => client.post(`/jobs/${jobId}/retry`).then((r) => r.data),
+  purgeOldTelemetry: (params?: { keep_days?: number }) =>
+    client.post('/system/telemetry/purge', null, { params }).then((r) => r.data),
   startupContext: () => client.get('/system/startup').then((r) => r.data),
   decisionAudit: (params?: { limit?: number; decision?: 'accept' | 'reject' }) =>
     client.get('/system/decision-audit', { params }).then((r) => r.data),
@@ -129,7 +142,7 @@ export const api = {
   startCycle: () => client.post('/system/cycle/start').then((r) => r.data),
   stopCycle: () => client.post('/system/cycle/stop').then((r) => r.data),
   cleanupDuplicates: (confirm = false) => client.post(`/system/cleanup?confirm=${confirm ? 'true' : 'false'}`).then((r) => r.data),
-  cleanupPreview: () => client.get('/system/cleanup/preview').then((r) => r.data),
+  cleanupPreview: (params?: { force?: boolean }) => client.get('/system/cleanup/preview', { params }).then((r) => r.data),
   utilitiesMaintenanceInsights: () => client.get('/system/utilities/maintenance-insights').then((r) => r.data),
   triggerUpdate: () => client.post('/system/update').then((r) => r.data),
   recyclingBinInfo: () => client.get('/system/recycling-bin').then((r) => r.data),

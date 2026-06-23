@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from loguru import logger
+
 from backend.config import get_config
 
 
@@ -30,7 +32,8 @@ class PlexClient:
         for section_name in sections:
             try:
                 section = server.library.section(section_name)
-            except Exception:
+            except Exception as e:
+                logger.warning("Plex section {!r} unavailable, skipping: {}", section_name, e)
                 continue
             for plex_movie in section.all():
                 for media in plex_movie.media:
@@ -70,11 +73,14 @@ class PlexClient:
         if section_name:
             server.library.section(section_name).update()
         else:
-            for name in self.library_sections:
+            sections = self.library_sections or [
+                s.title for s in server.library.sections() if s.type == "movie"
+            ]
+            for name in sections:
                 try:
                     server.library.section(name).update()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Plex refresh failed for section {!r}: {}", name, e)
 
     def test_connection(self) -> dict:
         try:
@@ -121,8 +127,12 @@ class PlexClient:
                         for part in media.parts:
                             show_sizes[key] = show_sizes.get(key, 0) + (part.size or 0)
                     show_ep_counts[key] = show_ep_counts.get(key, 0) + 1
-            except Exception:
-                pass  # fall back to per-show episode iteration below
+            except Exception as e:
+                logger.warning(
+                    "Batch episode fetch failed for section {!r}, falling back to per-show iteration: {}",
+                    section.title,
+                    e,
+                )
 
             # --- 2. Iterate shows (already loaded by section.all()) ---
             for show in section.all():
@@ -156,8 +166,12 @@ class PlexClient:
                             ts = viewed_at.isoformat() if hasattr(viewed_at, "isoformat") else str(viewed_at)
                             if last_watched_at is None or ts > last_watched_at:
                                 last_watched_at = ts
-                except Exception:
-                    pass  # history() may fail on managed accounts or restricted servers
+                except Exception as e:
+                    logger.debug(
+                        "Watch history unavailable for show {!r} (managed/restricted account?): {}",
+                        show.title,
+                        e,
+                    )
 
                 # Extract IDs from guids
                 tvdb_id = None
@@ -198,5 +212,6 @@ class PlexClient:
             show = server.fetchItem(int(plex_rating_key))
             show.delete()
             return True
-        except Exception:
+        except Exception as e:
+            logger.error("Plex delete_show failed for rating key {}: {}", plex_rating_key, e)
             return False

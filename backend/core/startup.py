@@ -74,6 +74,9 @@ def run_startup_checks(config_path: str = "config.yaml") -> None:
     # ── Config summary ───────────────────────────────────────────────────────
     ctx["config"] = _config_summary(cfg, config_path)
 
+    # ── Config sanity warnings ───────────────────────────────────────────────
+    _check_config_sanity(cfg)
+
     _startup_context = ctx
 
     _emit_banner(ctx)
@@ -87,16 +90,26 @@ def _check_runtime() -> dict[str, Any]:
     info = os_info()
     in_docker = is_docker()
     cid = container_id()
+    python_version = sys.version_info
+    python_supported = (3, 11) <= (python_version.major, python_version.minor) <= (3, 13)
 
     result: dict[str, Any] = {
         "os": info["os"],
         "os_release": info["os_release"],
         "arch": platform.machine(),
         "python": info["python"],
+        "python_supported": python_supported,
+        "python_supported_range": "3.11-3.13",
         "in_docker": in_docker,
         "container_id": cid or "",
         "pid": os.getpid(),
     }
+
+    if not python_supported:
+        _startup_warnings.append(
+            f"Python {info['python']} is outside Slimarr's supported range "
+            "(3.11-3.13). Dependency wheels and tests may fail."
+        )
 
     if in_docker:
         logger.info(
@@ -199,6 +212,59 @@ def _config_summary(cfg: Any, config_path: str) -> dict[str, Any]:
         "dry_run": cfg.automation.dry_run,
         "port": cfg.server.port,
     }
+
+
+def _check_config_sanity(cfg: Any) -> None:
+    """Emit startup warnings for dangerous or dead configuration combinations."""
+    files = cfg.files
+    schedule = cfg.schedule
+    nas_prefixes: list[str] = getattr(files, "nas_path_prefixes", []) or []
+    has_nas = bool(nas_prefixes)
+
+    # ── Wildcard CORS origin ──────────────────────────────────────────────
+    allowed_origins = getattr(cfg.server, "allowed_origins", []) or []
+    if "*" in allowed_origins:
+        _startup_warnings.append(
+            "server.allowed_origins includes '*' (any origin allowed). Credentialed "
+            "cookies are not used, so this is lower-risk than usual, but it still "
+            "allows any website to call the API using a visitor's bearer token if "
+            "one is exposed client-side. Prefer listing explicit origins."
+        )
+
+    if not has_nas:
+        return
+
+    # ── Recycling bin on same NAS prefix ─────────────────────────────────
+    recycle = (getattr(files, "recycling_bin", "") or "").strip()
+    if recycle:
+        for prefix in nas_prefixes:
+            if recycle.startswith(prefix.rstrip("/\\")):
+                _startup_warnings.append(
+                    f"files.recycling_bin ({recycle!r}) is located on a NAS path prefix "
+                    f"({prefix!r}). Every replacement will perform two NAS writes "
+                    "(recycle move + place). Consider using a local recycling bin."
+                )
+                break
+
+    # ── Aggressive download rate with NAS ────────────────────────────────
+    max_dl = getattr(schedule, "max_downloads_per_night", 0)
+    throttle = getattr(schedule, "throttle_seconds", 30)
+    if max_dl > 5 and throttle < 30:
+        _startup_warnings.append(
+            f"schedule.max_downloads_per_night={max_dl} with throttle_seconds={throttle} "
+            "is aggressive when NAS paths are configured. "
+            "Consider raising throttle_seconds or lowering max_downloads_per_night."
+        )
+
+    # ── No NAS savings gate ───────────────────────────────────────────────
+    nas_min_mb = getattr(cfg.comparison, "min_savings_mb_for_nas", 0)
+    if nas_min_mb == 0:
+        _startup_warnings.append(
+            "comparison.min_savings_mb_for_nas is 0 with NAS paths configured. "
+            "Every qualifying replacement will be attempted regardless of size savings. "
+            "Consider setting min_savings_mb_for_nas to at least 500 to avoid "
+            "unnecessary NAS writes for marginal gains."
+        )
 
 
 def _emit_banner(ctx: dict[str, Any]) -> None:

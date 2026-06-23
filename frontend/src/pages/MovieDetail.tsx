@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { useToast } from '@/components/Toast'
+import ConfirmDialog from '@/components/ConfirmDialog'
 import type { Movie, SearchResultItem } from '@/lib/types'
 import QualityBadge from '@/components/QualityBadge'
 import { ArrowLeft, Search, Zap, Download, Info, X, Lock, Unlock, Star, SlidersHorizontal, Save } from 'lucide-react'
@@ -65,6 +66,7 @@ export default function MovieDetail() {
   const [preferringId, setPreferringId] = useState<number | null>(null)
   const [clearingPreferred, setClearingPreferred] = useState(false)
   const [savingQuality, setSavingQuality] = useState(false)
+  const [forceDownloadResultId, setForceDownloadResultId] = useState<number | null>(null)
   const [qualityIntent, setQualityIntent] = useState<Movie['quality_intent']>('space_saver')
   const [forceKeep, setForceKeep] = useState(false)
   const [allowLarger, setAllowLarger] = useState(false)
@@ -148,12 +150,14 @@ export default function MovieDetail() {
   const doDownloadResult = async (resultId: number, opts?: { force?: boolean }) => {
     const force = Boolean(opts?.force)
     if (force) {
-      const proceed = window.confirm(
-        'Force-download this release even though Slimarr did not rank it as best?'
-      )
-      if (!proceed) return
+      setForceDownloadResultId(resultId)
+      return
     }
+    await _executeDownload(resultId, false)
+  }
 
+  const _executeDownload = async (resultId: number, force: boolean) => {
+    setForceDownloadResultId(null)
     setDownloadingId(resultId)
     try {
       await api.downloadResult(movieId, resultId)
@@ -161,7 +165,7 @@ export default function MovieDetail() {
         force
           ? 'Forced download queued - check Queue page for progress'
           : 'Download queued - check Queue page for progress',
-        'success'
+        'success',
       )
       setTimeout(() => api.movie(movieId).then(setMovie), 3000)
     } catch {
@@ -710,6 +714,16 @@ export default function MovieDetail() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={forceDownloadResultId !== null}
+        title="Force Download?"
+        message="This release was not ranked as the best candidate by Slimarr. Force-download it anyway?"
+        confirmLabel="Force Download"
+        destructive
+        onConfirm={() => { if (forceDownloadResultId !== null) void _executeDownload(forceDownloadResultId, true) }}
+        onCancel={() => setForceDownloadResultId(null)}
+      />
     </div>
   )
 }

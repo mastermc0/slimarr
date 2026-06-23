@@ -3,9 +3,11 @@ import { useSearchParams } from 'react-router-dom'
 import { api } from '@/lib/api'
 import type { Movie } from '@/lib/types'
 import PosterCard from '@/components/PosterCard'
+import EmptyState from '@/components/EmptyState'
+import { Skeleton } from '@/components/Skeleton'
 import { useToast } from '@/components/Toast'
 import { useSocket } from '@/hooks/useSocket'
-import { Search, RefreshCw } from 'lucide-react'
+import { Film, Search, RefreshCw } from 'lucide-react'
 
 export default function Library() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -126,7 +128,23 @@ export default function Library() {
       <p className="text-sm text-gray-400">{total} movies</p>
 
       {loading ? (
-        <p className="text-gray-500">Loading…</p>
+        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-3">
+          {Array.from({ length: 24 }).map((_, i) => (
+            <div key={i} className="aspect-[2/3] rounded-lg overflow-hidden">
+              <Skeleton className="w-full h-full" />
+            </div>
+          ))}
+        </div>
+      ) : movies.length === 0 ? (
+        <EmptyState
+          icon={search ? Search : Film}
+          title={search ? 'No movies found' : 'Library is empty'}
+          description={
+            search
+              ? `No movies match "${search}". Try a different search term or clear the filter.`
+              : 'Run a library scan to import your Plex movies.'
+          }
+        />
       ) : (
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-3">
           {movies.map((m) => <PosterCard key={m.id} movie={m} />)}
