@@ -4,6 +4,30 @@ All notable changes to Slimarr are documented here.
 
 ---
 
+## [1.7.1.0] - 2026-07-04
+
+Standalone release summary: `docs/CHANGELOG_v1.7.1.0.md`
+
+Patch release fixing a movie-stuck-in-an-endless-replace-loop bug found
+while investigating matching reports from two users, plus a dashboard query
+performance fix and three UI correctness bugs.
+
+- Fixed `replace_file()` never persisting the re-probed resolution/codec/
+  bitrate of a replacement file, which left a movie's tracked quality stuck
+  at its previous file's values forever and made every future cycle treat
+  the (accurately-replaced) local copy as still needing an upgrade.
+- Added a `(decision, created_at)` composite index on `decision_audit_log`;
+  the NAS storage-pressure dashboard query was taking up to 6.4s in
+  production logs because SQLite's planner wasn't using the existing
+  `(created_at, decision)` index for this query shape.
+- Fixed a Movie Detail bug where a pending search/process/download response
+  from a previously-viewed movie could overwrite a different movie's
+  on-screen data after navigating away within a few seconds.
+- Fixed a Library search race where a fast typist could end up seeing
+  results for an earlier, superseded query.
+- Fixed the System page "Run Now" button getting stuck on "Starting…"
+  indefinitely when starting the automation cycle failed outright.
+
 ## [1.7.0.0] - 2026-06-23
 
 Standalone release summary: `docs/CHANGELOG_v1.7.0.0.md`

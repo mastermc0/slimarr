@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '@/lib/api'
 import type { Movie } from '@/lib/types'
@@ -50,15 +50,25 @@ export default function Library() {
     }
   }
 
+  // Every keystroke in the search box triggers a new load() with no debounce,
+  // so responses can arrive out of order (e.g. the request for "a" resolving
+  // after the request for "ali"). Track the latest request and ignore
+  // responses from any request that's since been superseded.
+  const latestRequestId = useRef(0)
+
   const load = useCallback(() => {
+    const requestId = ++latestRequestId.current
     setLoading(true)
     api.movies({ page, per_page: PER_PAGE, search, status })
       .then((d: { movies: Movie[]; total: number }) => {
+        if (requestId !== latestRequestId.current) return
         setMovies(d.movies)
         setTotal(d.total)
       })
       .catch(() => {})
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (requestId === latestRequestId.current) setLoading(false)
+      })
   }, [page, search, status])
 
   useEffect(() => { load() }, [load])

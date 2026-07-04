@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { useToast } from '@/components/Toast'
@@ -118,6 +118,16 @@ export default function MovieDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [movieId])
 
+  // Navigating between movie detail pages reuses this component instance rather
+  // than remounting it, so a pending setTimeout from the previous movie (e.g. a
+  // search/process/download kicked off just before navigating away) can still
+  // fire after movieId has changed. Guard those callbacks against the id they
+  // were scheduled for so they don't overwrite the now-displayed movie's data.
+  const currentMovieIdRef = useRef(movieId)
+  useEffect(() => {
+    currentMovieIdRef.current = movieId
+  }, [movieId])
+
   const { toast } = useToast()
 
   const doSearch = async () => {
@@ -126,7 +136,9 @@ export default function MovieDetail() {
       await api.triggerSearch(movieId)
       toast('Search started - results will appear shortly', 'info')
       setTimeout(() => {
-        api.searchResults(movieId).then(setResults).finally(() => setSearching(false))
+        api.searchResults(movieId).then((r) => {
+          if (currentMovieIdRef.current === movieId) setResults(r)
+        }).finally(() => setSearching(false))
       }, 3000)
     } catch {
       toast('Search failed', 'error')
@@ -139,7 +151,11 @@ export default function MovieDetail() {
     try {
       await api.triggerProcess(movieId)
       toast('Processing best match...', 'info')
-      setTimeout(() => api.movie(movieId).then(setMovie), 5000)
+      setTimeout(() => {
+        api.movie(movieId).then((m) => {
+          if (currentMovieIdRef.current === movieId) setMovie(m)
+        })
+      }, 5000)
     } catch {
       toast('Process failed', 'error')
     } finally {
@@ -167,7 +183,11 @@ export default function MovieDetail() {
           : 'Download queued - check Queue page for progress',
         'success',
       )
-      setTimeout(() => api.movie(movieId).then(setMovie), 3000)
+      setTimeout(() => {
+        api.movie(movieId).then((m) => {
+          if (currentMovieIdRef.current === movieId) setMovie(m)
+        })
+      }, 3000)
     } catch {
       toast('Failed to queue download', 'error')
     } finally {

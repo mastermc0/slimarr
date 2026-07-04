@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from loguru import logger
 from sqlalchemy import select
 
+from backend.core.media_probe import probe_media_file
+from backend.core.parser import normalize_codec, normalize_resolution
 from backend.core.storage import move_path, preflight_storage_path, remove_path
 from backend.database import ActivityLog, Download, Movie, ReplacementRecoveryRecord, async_session
 from backend.realtime.events import emit_event
@@ -72,8 +74,6 @@ async def _verify_downloaded_file(video_file: str, config) -> str | None:
         return f"downloaded file is empty: {video_file!r}"
 
     if getattr(config.files, "enable_media_probe", False):
-        from backend.core.media_probe import probe_media_file
-
         probe = await asyncio.to_thread(probe_media_file, video_file)
         if not probe or not (probe.get("video_codec") or probe.get("resolution")):
             logger.warning(
@@ -572,6 +572,16 @@ async def replace_file(download_id: int) -> bool:
 
         logger.info(f"File move succeeded. New size: {await _getsize(target_path):,} bytes")
 
+        # Re-probe the file now sitting at target_path so the movie record reflects
+        # what was actually placed, not the stats of the file it replaced. Without
+        # this, resolution/codec/bitrate stay stuck at the previous file's values
+        # forever (the scanner skips re-probing once it sees "complete" metadata
+        # already on the row), which makes the replaced copy look perpetually like
+        # a low-quality/mismatched file and keeps triggering further replacements.
+        new_probe: dict = {}
+        if getattr(config.files, "enable_media_probe", False):
+            new_probe = await asyncio.to_thread(probe_media_file, target_path)
+
         if fallback_backup_path and await _exists(fallback_backup_path):
             try:
                 await remove_path(
@@ -611,6 +621,14 @@ async def replace_file(download_id: int) -> bool:
         movie.file_path = target_path
         movie.file_size = new_size
         movie.status = "improved"
+        if new_probe.get("resolution"):
+            movie.resolution = normalize_resolution(new_probe["resolution"])
+        if new_probe.get("video_codec"):
+            movie.video_codec = normalize_codec(new_probe["video_codec"])
+        if new_probe.get("audio_codec"):
+            movie.audio_codec = new_probe["audio_codec"]
+        if new_probe.get("bitrate_kbps"):
+            movie.bitrate = new_probe["bitrate_kbps"]
 
         # Update download record
         dl.status = "replaced"

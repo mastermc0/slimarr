@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/react-18-61DAFB?logo=react&logoColor=black" />
   <img src="https://img.shields.io/badge/license-MIT-green" />
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20Docker%20%7C%20Windows-0ea5e9" />
-  <img src="https://img.shields.io/badge/release-1.7.0.0-success" />
+  <img src="https://img.shields.io/badge/release-1.7.1.0-success" />
 </p>
 
 <p align="center">
@@ -36,7 +36,30 @@ Scan Plex library -> Search Usenet indexers -> Compare releases
 
 Slimarr is designed to look and feel like a native member of the **\*arr ecosystem** (Radarr, Sonarr, Prowlarr). If you're familiar with those tools, you'll feel right at home.
 
-Current release: **1.7.0.0** (2026-06-23).
+Current release: **1.7.1.0** (2026-07-04).
+
+### What's New in 1.7.1.0 - Replacement-Loop Fix and UI Correctness Patches
+
+- **Fixed the root cause of movies being endlessly re-downloaded and
+  replaced.** `replace_file()` updated a movie's tracked file path/size after
+  a replacement but never its resolution/codec/bitrate, so the recorded
+  quality stayed stuck at the previous file's values forever — making the
+  (correctly-replaced) local copy look perpetually upgradeable and
+  triggering another replacement every cycle. It now re-probes the file at
+  its final location and persists the real values.
+- Added a `(decision, created_at)` composite index for the NAS
+  storage-pressure dashboard query, which was taking up to 6.4 seconds in
+  production because the existing index wasn't being used for this query
+  shape.
+- Fixed a Movie Detail bug where navigating to a different movie shortly
+  after triggering a search/process/download could let the previous movie's
+  stale response overwrite the new movie's on-screen data.
+- Fixed a Library search race that could show results for an earlier,
+  superseded query when typing quickly.
+- Fixed the System page "Run Now" button getting stuck on "Starting…"
+  indefinitely when starting the automation cycle failed outright.
+
+Full standalone release notes: `docs/CHANGELOG_v1.7.1.0.md`.
 
 ### What's New in 1.7.0.0 - Storage-Safe Automation and Persistent Jobs
 
@@ -243,11 +266,11 @@ docker compose -f docker-compose.postgres.yml up -d
 
 ### Option B - Windows installer
 
-Download `SlimarrSetup-1.7.0.0.exe` (or the latest `SlimarrSetup-*.exe`) from the [Releases](https://github.com/theantipopau/slimarr/releases) page and run it. The installer bundles Python and all dependencies - no manual setup required. After install, Slimarr appears in the Start Menu and optionally the system tray on login.
+Download `SlimarrSetup-1.7.1.0.exe` (or the latest `SlimarrSetup-*.exe`) from the [Releases](https://github.com/theantipopau/slimarr/releases) page and run it. The installer bundles Python and all dependencies - no manual setup required. After install, Slimarr appears in the Start Menu and optionally the system tray on login.
 
 At the end of setup, the installer shows `Start Slimarr now` (checked by default). If selected, Slimarr starts minimized with the tray icon available and your browser opens automatically to `http://localhost:9494` when the backend is ready.
 
-`1.7.0.0` is the current release target. Newer `main` branch changes may land before the next installer is cut; if you want those immediately, run Slimarr from source or Docker.
+`1.7.1.0` is the current release target. Newer `main` branch changes may land before the next installer is cut; if you want those immediately, run Slimarr from source or Docker.
 
 ### Option C - From source
 

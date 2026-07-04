@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
-    DateTime, Float, ForeignKey, Integer, String, Text, func,
+    DateTime, Float, ForeignKey, Index, Integer, String, Text, func,
 )
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
@@ -281,6 +281,13 @@ class UploaderStats(Base):
 
 class DecisionAuditLog(Base):
     __tablename__ = "decision_audit_log"
+    __table_args__ = (
+        # Storage-pressure insights filters this table by decision + a created_at
+        # window on every dashboard refresh; without a composite index this table
+        # scan gets slow once it accumulates the reject-heavy history a running
+        # instance produces (most analyzed candidates are rejected).
+        Index("ix_decision_audit_log_decision_created_at", "decision", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     movie_id: Mapped[Optional[int]] = mapped_column(ForeignKey("movies.id"), nullable=True, index=True)
@@ -506,7 +513,7 @@ async def _add_column_if_missing(
 
 # Current migration generation - increment whenever a new migration step is added
 # to _run_lightweight_migrations().  Used in diagnostics bundle.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 async def _run_lightweight_migrations(conn) -> None:
@@ -564,6 +571,16 @@ async def _run_lightweight_migrations(conn) -> None:
     await conn.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS ix_decision_audit_created_decision "
         "ON decision_audit_log (created_at, decision)"
+    )
+    # The storage-pressure insights query filters by decision equality first and
+    # created_at range second; SQLite's planner prefers the single-column
+    # ix_decision_audit_log_decision index over the (created_at, decision)
+    # composite above for that shape, falling back to a row-by-row created_at
+    # filter across the whole reject history. A (decision, created_at) leading
+    # composite lets it seek directly instead.
+    await conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_decision_audit_log_decision_created_at "
+        "ON decision_audit_log (decision, created_at)"
     )
     await conn.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS ix_activity_log_created_event "

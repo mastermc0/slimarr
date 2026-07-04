@@ -329,7 +329,10 @@ export default function System() {
       }
       await api.startCycle()
       toast('Automation cycle started', 'success')
-    } catch { toast('Failed to start cycle', 'error') }
+    } catch {
+      toast('Failed to start cycle', 'error')
+      setStarting(false)
+    }
     setTimeout(loadStatus, 1500)
   }
 
