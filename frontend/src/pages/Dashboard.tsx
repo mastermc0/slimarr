@@ -5,8 +5,8 @@ import StatCard from '@/components/StatCard'
 import ActivityItem from '@/components/ActivityItem'
 import { useToast } from '@/components/Toast'
 import { api } from '@/lib/api'
-import { NAS_PRESETS } from '@/lib/nasPresets'
 import { useSocket } from '@/hooks/useSocket'
+import { useNasPresetManager } from '@/hooks/useNasPreset'
 import type { DashboardStats, ActivityEntry, IntegrationMatrix, NasPressure } from '@/lib/types'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer
@@ -22,7 +22,6 @@ function formatDate(value?: string): string {
 }
 
 export default function Dashboard() {
-  const NAS_PROFILE_SNAPSHOT_KEY = 'slimarr_nas_profile_snapshot'
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [activity, setActivity] = useState<ActivityEntry[]>([])
   const [history, setHistory] = useState<{ date: string; savings_bytes: number }[]>([])
@@ -30,8 +29,6 @@ export default function Dashboard() {
   const [nasPressure, setNasPressure] = useState<NasPressure | null>(null)
   const [cycling, setCycling] = useState(false)
   const [scanning, setScanning] = useState(false)
-  const [presetApplying, setPresetApplying] = useState<string | null>(null)
-  const [hasPresetSnapshot, setHasPresetSnapshot] = useState(false)
 
   const reload = () => {
     api.stats().then(setStats).catch(() => {})
@@ -41,9 +38,15 @@ export default function Dashboard() {
     api.nasPressure().then((d) => setNasPressure(d as NasPressure)).catch(() => {})
   }
 
+  const {
+    applyNasPreset,
+    restorePreviousNasProfile,
+    applying: presetApplying,
+    hasSnapshot: hasPresetSnapshot,
+  } = useNasPresetManager(reload)
+
   useEffect(() => {
     reload()
-    setHasPresetSnapshot(localStorage.getItem(NAS_PROFILE_SNAPSHOT_KEY) !== null)
   }, [])
 
   // Live updates via Socket.IO
@@ -81,108 +84,6 @@ export default function Dashboard() {
     } catch {
       setScanning(false)
       toast('Failed to start scan', 'error')
-    }
-  }
-
-  const applyNasPreset = async (preset: 'gentle' | 'balanced') => {
-    setPresetApplying(preset)
-    try {
-      const settings = await api.getSettings() as Record<string, unknown>
-      const currentSchedule = (settings.schedule as Record<string, unknown> | undefined) ?? {}
-      const currentComparison = (settings.comparison as Record<string, unknown> | undefined) ?? {}
-      const currentFiles = (settings.files as Record<string, unknown> | undefined) ?? {}
-      localStorage.setItem(
-        NAS_PROFILE_SNAPSHOT_KEY,
-        JSON.stringify({
-          schedule: {
-            min_cycle_interval_minutes: currentSchedule.min_cycle_interval_minutes,
-            max_downloads_per_night: currentSchedule.max_downloads_per_night,
-            throttle_seconds: currentSchedule.throttle_seconds,
-          },
-          comparison: {
-            min_savings_mb_for_nas: currentComparison.min_savings_mb_for_nas,
-          },
-          files: {
-            enable_media_probe: currentFiles.enable_media_probe,
-            nas_path_prefixes: currentFiles.nas_path_prefixes,
-            nas_max_write_gb_per_day: currentFiles.nas_max_write_gb_per_day,
-            nas_max_replacements_per_day: currentFiles.nas_max_replacements_per_day,
-            nas_max_transfer_mbps: currentFiles.nas_max_transfer_mbps,
-          },
-        })
-      )
-
-      const next = JSON.parse(JSON.stringify(settings)) as Record<string, unknown>
-      const schedule = (next.schedule as Record<string, unknown> | undefined) ?? {}
-      const comparison = (next.comparison as Record<string, unknown> | undefined) ?? {}
-      const files = (next.files as Record<string, unknown> | undefined) ?? {}
-      const p = NAS_PRESETS[preset]
-      const hasNasPrefixes = ((files.nas_path_prefixes as string[] | undefined) ?? []).length > 0
-
-      schedule.min_cycle_interval_minutes = p.min_cycle_interval_minutes
-      schedule.max_downloads_per_night = p.max_downloads_per_night
-      schedule.throttle_seconds = p.throttle_seconds
-      comparison.min_savings_mb_for_nas = p.min_savings_mb_for_nas
-      files.enable_media_probe = p.enable_media_probe
-      files.nas_max_write_gb_per_day = p.nas_max_write_gb_per_day
-      files.nas_max_replacements_per_day = p.nas_max_replacements_per_day
-      files.nas_max_transfer_mbps = p.nas_max_transfer_mbps
-
-      next.schedule = schedule
-      next.comparison = comparison
-      next.files = files
-
-      await api.updateSettings(next)
-      setHasPresetSnapshot(true)
-      toast(`Applied ${preset} NAS profile`, 'success')
-      if (!hasNasPrefixes) {
-        toast('Add your real NAS path in Settings to activate these limits', 'info')
-      }
-      reload()
-    } catch {
-      toast('Failed to apply NAS profile', 'error')
-    } finally {
-      setPresetApplying(null)
-    }
-  }
-
-  const restorePreviousNasProfile = async () => {
-    const raw = localStorage.getItem(NAS_PROFILE_SNAPSHOT_KEY)
-    if (!raw) {
-      toast('No previous NAS profile to restore', 'info')
-      return
-    }
-
-    setPresetApplying('restore')
-    try {
-      const snapshot = JSON.parse(raw) as {
-        schedule?: Record<string, unknown>
-        comparison?: Record<string, unknown>
-        files?: Record<string, unknown>
-      }
-      const settings = await api.getSettings() as Record<string, unknown>
-      const next = JSON.parse(JSON.stringify(settings)) as Record<string, unknown>
-      const schedule = (next.schedule as Record<string, unknown> | undefined) ?? {}
-      const comparison = (next.comparison as Record<string, unknown> | undefined) ?? {}
-      const files = (next.files as Record<string, unknown> | undefined) ?? {}
-
-      Object.assign(schedule, snapshot.schedule ?? {})
-      Object.assign(comparison, snapshot.comparison ?? {})
-      Object.assign(files, snapshot.files ?? {})
-
-      next.schedule = schedule
-      next.comparison = comparison
-      next.files = files
-
-      await api.updateSettings(next)
-      localStorage.removeItem(NAS_PROFILE_SNAPSHOT_KEY)
-      setHasPresetSnapshot(false)
-      toast('Restored previous NAS profile', 'success')
-      reload()
-    } catch {
-      toast('Failed to restore previous NAS profile', 'error')
-    } finally {
-      setPresetApplying(null)
     }
   }
 

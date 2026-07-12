@@ -33,18 +33,37 @@ class SonarrClient:
         """
         series_list = await self.get_all_series()
 
-        # Try exact match first, then case-insensitive, then prefix
+        # Try an exact (case-insensitive) match first. Only fall back to a
+        # 15-character prefix match if it's unambiguous — matching the wrong
+        # series here means unmonitoring (and potentially deleting) the wrong
+        # show, so an ambiguous prefix match fails loudly instead of guessing.
         target = title.lower().strip()
         match = None
         for s in series_list:
             if s.get("title", "").lower().strip() == target:
                 match = s
                 break
+
         if match is None:
-            for s in series_list:
-                if s.get("title", "").lower().strip().startswith(target[:15]):
-                    match = s
-                    break
+            prefix_matches = [
+                s for s in series_list
+                if s.get("title", "").lower().strip().startswith(target[:15])
+            ]
+            if len(prefix_matches) == 1:
+                match = prefix_matches[0]
+                logger.warning(
+                    "Sonarr: no exact title match for {!r}; using fuzzy prefix match to {!r} (id={})",
+                    title,
+                    match.get("title"),
+                    match.get("id"),
+                )
+            elif len(prefix_matches) > 1:
+                logger.warning(
+                    "Sonarr: title {!r} has {} ambiguous prefix matches ({}) — refusing to guess",
+                    title,
+                    len(prefix_matches),
+                    ", ".join(s.get("title", "?") for s in prefix_matches),
+                )
 
         if match is None:
             return False

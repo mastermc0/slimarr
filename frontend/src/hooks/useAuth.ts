@@ -9,16 +9,36 @@ export function useAuth() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    api.authCheck()
-      .then((data: { has_user: boolean; setup_required: boolean }) => {
-        setError(null)
-        setSetupRequired(data.setup_required)
-        setIsLoggedIn(auth.isLoggedIn())
-      })
-      .catch(() => {
-        setError('Slimarr is still starting or the local API is unreachable.')
-      })
-      .finally(() => setLoading(false))
+    let cancelled = false
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+
+    const check = () => {
+      api.authCheck()
+        .then((data: { has_user: boolean; setup_required: boolean }) => {
+          if (cancelled) return
+          setError(null)
+          setSetupRequired(data.setup_required)
+          setIsLoggedIn(auth.isLoggedIn())
+        })
+        .catch(() => {
+          if (cancelled) return
+          // The API being unreachable on first load is usually the tray app
+          // still starting up, not a permanent failure — keep retrying
+          // instead of leaving the user stuck behind a disabled form until
+          // they manually refresh the page.
+          setError('Slimarr is still starting or the local API is unreachable.')
+          retryTimer = setTimeout(check, 3000)
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }
+
+    check()
+    return () => {
+      cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
+    }
   }, [])
 
   const login = async (username: string, password: string) => {

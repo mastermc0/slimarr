@@ -65,7 +65,7 @@ export default function Sidebar({ className, onNavigate }: SidebarProps) {
             key={to}
             to={to}
             onClick={onNavigate}
-            end={to === '/'}
+            end={['/', '/queue', '/settings', '/system'].includes(to)}
             className={({ isActive }) =>
               clsx(
                 'group flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200',

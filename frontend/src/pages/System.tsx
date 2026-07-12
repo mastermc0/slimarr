@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '@/lib/api'
-import { NAS_PRESETS, type NasPresetName } from '@/lib/nasPresets'
 import { useSocket } from '@/hooks/useSocket'
 import { useToast } from '@/components/Toast'
+import { useNasPresetManager } from '@/hooks/useNasPreset'
 import type { DecisionAuditEntry, DuplicateCleanupPreview, HealthMatrix, NasPressure, PersistentJobsSnapshot, PreflightResult, ReplacementRecoverySnapshot, StorageOperationsSnapshot, StoragePreflight, UtilitiesMaintenanceInsights } from '@/lib/types'
 import { Play, Square, RefreshCw, Database, Clock, Server, CheckCircle, XCircle, Trash2, ArrowUpCircle, ShieldCheck, Sparkles, GaugeCircle, HardDrive, ShieldAlert, SlidersHorizontal } from 'lucide-react'
 import ConfirmDialog from '@/components/ConfirmDialog'
@@ -62,7 +62,6 @@ interface SystemInfo {
 }
 
 export default function System() {
-  const NAS_PROFILE_SNAPSHOT_KEY = 'slimarr_nas_profile_snapshot'
   const [status, setStatus] = useState<Record<string, unknown> | null>(null)
   const [info, setInfo] = useState<SystemInfo | null>(null)
   const [services, setServices] = useState<Record<string, ServiceHealth> | null>(null)
@@ -82,8 +81,6 @@ export default function System() {
   const [cleanupPreviewLoading, setCleanupPreviewLoading] = useState(false)
   const [maintenanceInsights, setMaintenanceInsights] = useState<UtilitiesMaintenanceInsights | null>(null)
   const [nasPressure, setNasPressure] = useState<NasPressure | null>(null)
-  const [nasPresetApplying, setNasPresetApplying] = useState<string | null>(null)
-  const [hasPresetSnapshot, setHasPresetSnapshot] = useState(false)
   const [storageGuard, setStorageGuard] = useState<StoragePreflight | null>(null)
   const [storageGuardLoading, setStorageGuardLoading] = useState(false)
   const [storageOperations, setStorageOperations] = useState<StorageOperationsSnapshot | null>(null)
@@ -173,10 +170,6 @@ export default function System() {
     }
   }, [])
 
-  useEffect(() => {
-    setHasPresetSnapshot(localStorage.getItem(NAS_PROFILE_SNAPSHOT_KEY) !== null)
-  }, [])
-
   useSocket('scan:started', () => setScanning(true))
   useSocket('scan:completed', () => { setScanning(false); loadStatus() })
   useSocket('orchestrator:status', (d) => {
@@ -187,109 +180,12 @@ export default function System() {
 
   const { toast } = useToast()
 
-  const applyNasPreset = async (preset: NasPresetName) => {
-    setNasPresetApplying(preset)
-    try {
-      const settings = await api.getSettings() as Record<string, unknown>
-      const currentSchedule = (settings.schedule as Record<string, unknown> | undefined) ?? {}
-      const currentComparison = (settings.comparison as Record<string, unknown> | undefined) ?? {}
-      const currentFiles = (settings.files as Record<string, unknown> | undefined) ?? {}
-      localStorage.setItem(
-        NAS_PROFILE_SNAPSHOT_KEY,
-        JSON.stringify({
-          schedule: {
-            min_cycle_interval_minutes: currentSchedule.min_cycle_interval_minutes,
-            max_downloads_per_night: currentSchedule.max_downloads_per_night,
-            throttle_seconds: currentSchedule.throttle_seconds,
-          },
-          comparison: {
-            min_savings_mb_for_nas: currentComparison.min_savings_mb_for_nas,
-          },
-          files: {
-            enable_media_probe: currentFiles.enable_media_probe,
-            nas_path_prefixes: currentFiles.nas_path_prefixes,
-            nas_max_write_gb_per_day: currentFiles.nas_max_write_gb_per_day,
-            nas_max_replacements_per_day: currentFiles.nas_max_replacements_per_day,
-            nas_max_transfer_mbps: currentFiles.nas_max_transfer_mbps,
-          },
-        })
-      )
-
-      const next = JSON.parse(JSON.stringify(settings)) as Record<string, unknown>
-      const schedule = (next.schedule as Record<string, unknown> | undefined) ?? {}
-      const comparison = (next.comparison as Record<string, unknown> | undefined) ?? {}
-      const files = (next.files as Record<string, unknown> | undefined) ?? {}
-      const cfg = NAS_PRESETS[preset]
-
-      schedule.min_cycle_interval_minutes = cfg.min_cycle_interval_minutes
-      schedule.max_downloads_per_night = cfg.max_downloads_per_night
-      schedule.throttle_seconds = cfg.throttle_seconds
-      comparison.min_savings_mb_for_nas = cfg.min_savings_mb_for_nas
-      files.enable_media_probe = cfg.enable_media_probe
-      files.nas_max_write_gb_per_day = cfg.nas_max_write_gb_per_day
-      files.nas_max_replacements_per_day = cfg.nas_max_replacements_per_day
-      files.nas_max_transfer_mbps = cfg.nas_max_transfer_mbps
-
-      const prefixes = (files.nas_path_prefixes as string[] | undefined) ?? []
-
-      next.schedule = schedule
-      next.comparison = comparison
-      next.files = files
-
-      await api.updateSettings(next)
-      setHasPresetSnapshot(true)
-      toast(`Applied ${preset} NAS preset`, 'success')
-      loadNasPressure()
-      if (!prefixes.length) {
-        toast('Add your real NAS path in Settings to activate these limits', 'info')
-      }
-    } catch {
-      toast('Failed to apply NAS preset', 'error')
-    } finally {
-      setNasPresetApplying(null)
-    }
-  }
-
-  const restorePreviousNasProfile = async () => {
-    const raw = localStorage.getItem(NAS_PROFILE_SNAPSHOT_KEY)
-    if (!raw) {
-      toast('No previous NAS profile to restore', 'info')
-      return
-    }
-
-    setNasPresetApplying('restore')
-    try {
-      const snapshot = JSON.parse(raw) as {
-        schedule?: Record<string, unknown>
-        comparison?: Record<string, unknown>
-        files?: Record<string, unknown>
-      }
-
-      const settings = await api.getSettings() as Record<string, unknown>
-      const next = JSON.parse(JSON.stringify(settings)) as Record<string, unknown>
-      const schedule = (next.schedule as Record<string, unknown> | undefined) ?? {}
-      const comparison = (next.comparison as Record<string, unknown> | undefined) ?? {}
-      const files = (next.files as Record<string, unknown> | undefined) ?? {}
-
-      Object.assign(schedule, snapshot.schedule ?? {})
-      Object.assign(comparison, snapshot.comparison ?? {})
-      Object.assign(files, snapshot.files ?? {})
-
-      next.schedule = schedule
-      next.comparison = comparison
-      next.files = files
-
-      await api.updateSettings(next)
-      localStorage.removeItem(NAS_PROFILE_SNAPSHOT_KEY)
-      setHasPresetSnapshot(false)
-      toast('Restored previous NAS profile', 'success')
-      loadNasPressure()
-    } catch {
-      toast('Failed to restore previous NAS profile', 'error')
-    } finally {
-      setNasPresetApplying(null)
-    }
-  }
+  const {
+    applyNasPreset,
+    restorePreviousNasProfile,
+    applying: nasPresetApplying,
+    hasSnapshot: hasPresetSnapshot,
+  } = useNasPresetManager(loadNasPressure)
 
   const runPreflight = async () => {
     setPreflightLoading(true)
@@ -430,17 +326,20 @@ export default function System() {
   const confidence = cleanupPreview?.confidence ?? {}
   const confidenceTotal = (confidence.high ?? 0) + (confidence.medium ?? 0) + (confidence.low ?? 0)
 
+  // Matches the emerald/amber/rose "healthy/degraded/failed" convention used
+  // by every other status indicator on this page (maintenance, NAS pressure,
+  // storage guard, recovery, jobs) instead of a separate green/yellow/red set.
   const matrixStatusClass = (value?: string) => {
-    if (value === 'healthy') return 'text-green-400'
-    if (value === 'degraded') return 'text-yellow-300'
+    if (value === 'healthy') return 'text-emerald-300'
+    if (value === 'degraded') return 'text-amber-300'
     if (value === 'disabled') return 'text-gray-500'
-    return 'text-red-400'
+    return 'text-rose-300'
   }
 
   const preflightStatusClass = (value?: string) => {
-    if (value === 'ok') return 'text-green-400'
-    if (value === 'warn') return 'text-yellow-300'
-    return 'text-red-400'
+    if (value === 'ok') return 'text-emerald-300'
+    if (value === 'warn') return 'text-amber-300'
+    return 'text-rose-300'
   }
 
   const maintenanceStateClass = useMemo(() => {
@@ -492,7 +391,7 @@ export default function System() {
     <div className="space-y-6 max-w-5xl">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/75">v1.7 operations center</p>
+          <p className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/75">Operations center</p>
           <h1 className="text-2xl font-bold">System</h1>
         </div>
         <p className="text-xs text-gray-400">Storage-safe automation, maintenance health, and recovery signals</p>
@@ -631,24 +530,24 @@ export default function System() {
         </div>
 
         <div className="mt-4 grid gap-3 md:grid-cols-4">
-          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">Preflight</p>
             <p className={`mt-1 text-lg font-semibold ${storageGuardClass}`}>{storageGuardState}</p>
             <p className="mt-1 text-[11px] text-gray-500">path, parent, free space</p>
           </div>
-          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">Path Class</p>
             <p className="mt-1 text-lg font-semibold text-white">{storageGuard?.classification ?? (nasPressure?.nas_policy_enabled ? 'nas-aware' : 'local')}</p>
             <p className="mt-1 truncate text-[11px] text-gray-500">{storageGuard?.matched_prefix ?? nasPressure?.nas_prefixes?.[0] ?? 'no prefix selected'}</p>
           </div>
-          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">Operation Locks</p>
             <p className={`mt-1 text-lg font-semibold ${storageFailed > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>
               {storageCompleted}
             </p>
             <p className="mt-1 text-[11px] text-gray-500">{storageFailed} failed operations</p>
           </div>
-          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">NAS Cooldown</p>
             <p className={`mt-1 text-lg font-semibold ${storageCooldownClass}`}>
               {nasPolicy?.cooldown_active ? `${nasPolicy.cooldown_remaining_seconds}s` : 'clear'}
@@ -737,22 +636,22 @@ export default function System() {
         </div>
 
         <div className="mt-4 grid gap-3 md:grid-cols-4">
-          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">State</p>
             <p className={`mt-1 text-lg font-semibold capitalize ${recoveryClass}`}>{recoveryState.replace(/_/g, ' ')}</p>
             <p className="mt-1 text-[11px] text-gray-500">{recoveryRecords.length} active record(s)</p>
           </div>
-          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">Needs Review</p>
             <p className={`mt-1 text-lg font-semibold ${recoveryRequired > 0 ? 'text-rose-300' : 'text-emerald-300'}`}>{recoveryRequired}</p>
             <p className="mt-1 text-[11px] text-gray-500">recovery-required replacements</p>
           </div>
-          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">Running</p>
             <p className={`mt-1 text-lg font-semibold ${runningRecovery > 0 ? 'text-amber-300' : 'text-gray-300'}`}>{runningRecovery}</p>
             <p className="mt-1 text-[11px] text-gray-500">filesystem phases tracked</p>
           </div>
-          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">Latest Phase</p>
             <div className="mt-1 truncate text-lg font-semibold">
               <StorageStateMark phase={latestRecoveryRecord?.phase} />
@@ -811,29 +710,29 @@ export default function System() {
         </div>
 
         <div className="mt-4 grid gap-3 md:grid-cols-4">
-          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">Recent Jobs</p>
             <p className="mt-1 text-lg font-semibold text-white">{jobRows.length}</p>
             <p className="mt-1 text-[11px] text-gray-500">latest persisted records</p>
           </div>
-          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">Active</p>
             <p className={`mt-1 text-lg font-semibold ${activeJobCount > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>{activeJobCount}</p>
             <p className="mt-1 text-[11px] text-gray-500">queued/running/cancelling</p>
           </div>
-          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">Attention</p>
             <p className={`mt-1 text-lg font-semibold ${failedJobCount > 0 ? 'text-rose-300' : 'text-emerald-300'}`}>{failedJobCount}</p>
             <p className="mt-1 text-[11px] text-gray-500">failed or recovery-required</p>
           </div>
-          <div className="rounded-lg border border-gray-800 bg-gray-900/70 p-3">
+          <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">Latest</p>
             <p className={`mt-1 truncate text-lg font-semibold capitalize ${jobStateClass}`}>{latestJob?.status?.replace(/_/g, ' ') ?? 'none'}</p>
             <p className="mt-1 truncate text-[11px] text-gray-500">{latestJob?.kind?.replace(/_/g, ' ') ?? 'no job history'}</p>
           </div>
         </div>
 
-        <div className="mt-4 divide-y divide-gray-800 overflow-hidden rounded-lg border border-gray-800 bg-gray-900/55">
+        <div className="mt-4 divide-y divide-gray-800 overflow-hidden rounded-lg border border-gray-800 bg-gray-900/60">
           {jobRows.length === 0 ? (
             <p className="px-3 py-4 text-sm text-gray-500">No persistent job history yet.</p>
           ) : (

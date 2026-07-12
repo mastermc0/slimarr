@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle, RefreshCw, Search, Timer, XCircle } from 'l
 import { api } from '@/lib/api'
 import { useSocket } from '@/hooks/useSocket'
 import { useToast } from '@/components/Toast'
+import EmptyState from '@/components/EmptyState'
 import type {
   SearchDiagnostics as SearchDiagnosticsType,
   SearchDiagnosticsHistoryResponse,
@@ -69,24 +70,36 @@ export default function SearchDiagnostics() {
   useEffect(() => {
     load()
     loadHistory(1)
-    const iv = setInterval(load, 10000)
+    const iv = setInterval(() => {
+      if (!document.hidden) load()
+    }, 10000)
     return () => clearInterval(iv)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useSocket('search:warning', () => load())
   useSocket('search:results', () => load())
 
   const events = data?.recent_events ?? []
-  const indexerEvents = events.filter((event) => event.type === 'indexer_response' || event.type === 'indexer_request')
-  const responseEvents = events.filter((event) => event.type === 'indexer_response')
-  const filterEvents = events.filter((event) => event.type === 'filter_summary')
-  const heatmap = Object.entries(data?.failure_heatmap ?? {})
-  const reliability = Object.entries(data?.indexer_reliability ?? {})
+  const indexerEvents = useMemo(
+    () => events.filter((event) => event.type === 'indexer_response' || event.type === 'indexer_request'),
+    [events]
+  )
+  const responseEvents = useMemo(
+    () => events.filter((event) => event.type === 'indexer_response'),
+    [events]
+  )
+  const filterEvents = useMemo(
+    () => events.filter((event) => event.type === 'filter_summary'),
+    [events]
+  )
+  const heatmap = useMemo(() => Object.entries(data?.failure_heatmap ?? {}), [data])
+  const reliability = useMemo(() => Object.entries(data?.indexer_reliability ?? {}), [data])
   const degradationTone = data?.degradation.blocking
-    ? 'border-red-500/50 bg-red-950/30'
+    ? 'border-rose-500/50 bg-rose-950/30'
     : data?.degradation.degraded
-      ? 'border-yellow-500/50 bg-yellow-950/20'
-      : 'border-green-500/30 bg-gray-900'
+      ? 'border-amber-500/50 bg-amber-950/20'
+      : 'border-emerald-500/30 bg-gray-900'
   const degradationTitle = data?.degradation.blocking
     ? 'Search automation paused'
     : data?.degradation.degraded
@@ -142,9 +155,9 @@ export default function SearchDiagnostics() {
       <div className={`rounded-xl border p-4 ${degradationTone}`}>
         <div className="flex items-start gap-3">
           {data?.degradation.degraded ? (
-            <AlertTriangle className={`${data.degradation.blocking ? 'text-red-300' : 'text-yellow-300'} shrink-0`} size={20} />
+            <AlertTriangle className={`${data.degradation.blocking ? 'text-rose-300' : 'text-amber-300'} shrink-0`} size={20} />
           ) : (
-            <CheckCircle className="text-green-400 shrink-0" size={20} />
+            <CheckCircle className="text-emerald-400 shrink-0" size={20} />
           )}
           <div className="min-w-0">
             <p className="font-semibold">{degradationTitle}</p>
@@ -152,7 +165,7 @@ export default function SearchDiagnostics() {
               {data?.degradation.reasons?.length ? data.degradation.reasons.join(', ') : 'No suspicious search failure pattern is active.'}
             </p>
             {data?.degradation.degraded && !data.degradation.blocking ? (
-              <p className="text-xs text-yellow-100 mt-2">
+              <p className="text-xs text-amber-100 mt-2">
                 Slimarr will keep searching, but this pattern needs attention if it persists across mainstream titles.
               </p>
             ) : null}
@@ -169,7 +182,7 @@ export default function SearchDiagnostics() {
           <div className="divide-y divide-gray-800">
             {data.warnings.slice(0, 5).map((warning) => (
               <div key={`${warning.timestamp}-${warning.message}`} className="px-4 py-3 text-sm">
-                <p className="text-yellow-200">{warning.message}</p>
+                <p className="text-amber-200">{warning.message}</p>
                 <p className="text-xs text-gray-500 mt-1">{fmtTime(warning.timestamp)}</p>
               </div>
             ))}
@@ -197,19 +210,19 @@ export default function SearchDiagnostics() {
           <div className="px-4 py-3 border-b border-gray-800 text-sm font-semibold">Indexer Responses</div>
           <div className="divide-y divide-gray-800 max-h-[520px] overflow-y-auto">
             {indexerEvents.length === 0 ? (
-              <p className="px-4 py-4 text-sm text-gray-500">No indexer requests recorded yet.</p>
+              <EmptyState compact title="No indexer requests recorded yet" />
             ) : indexerEvents.slice(0, 40).map((event, idx) => (
               <div key={`${event.timestamp}-${idx}`} className="px-4 py-3 text-sm space-y-2">
                 <div className="flex items-center gap-2">
                   {event.type === 'indexer_request' ? (
                     <RefreshCw size={14} className="text-blue-300" />
-                  ) : event.error ? <XCircle size={14} className="text-red-400" /> : <CheckCircle size={14} className="text-green-400" />}
+                  ) : event.error ? <XCircle size={14} className="text-rose-400" /> : <CheckCircle size={14} className="text-emerald-400" />}
                   <span className="font-medium">{event.indexer_name ?? event.provider ?? 'Indexer'}</span>
                   <span className="text-xs text-gray-500">
                     {event.type === 'indexer_request' ? 'started' : `HTTP ${event.status_code ?? 'n/a'} - ${fmtMs(event.latency_ms)}`}
                   </span>
                   {event.rate_limited ? (
-                    <span className="rounded bg-yellow-500/20 px-1.5 py-0.5 text-[11px] text-yellow-100">
+                    <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[11px] text-amber-100">
                       quota
                     </span>
                   ) : null}
@@ -229,7 +242,7 @@ export default function SearchDiagnostics() {
             <div className="px-4 py-3 border-b border-gray-800 text-sm font-semibold">Filtered vs Accepted</div>
             <div className="divide-y divide-gray-800">
               {filterEvents.length === 0 ? (
-                <p className="px-4 py-4 text-sm text-gray-500">No filtering summaries recorded yet.</p>
+                <EmptyState compact title="No filtering summaries recorded yet" />
               ) : filterEvents.slice(0, 8).map((event, idx) => (
                 <div key={`${event.timestamp}-${idx}`} className="px-4 py-3 text-sm">
                   <div className="flex justify-between gap-3">
@@ -246,9 +259,9 @@ export default function SearchDiagnostics() {
             <div className="px-4 py-3 border-b border-gray-800 text-sm font-semibold">Failure Heatmap</div>
             <div className="p-4 flex flex-wrap gap-2">
               {heatmap.length === 0 ? (
-                <p className="text-sm text-gray-500">No failures recorded.</p>
+                <EmptyState compact title="No failures recorded" />
               ) : heatmap.map(([key, value]) => (
-                <span key={key} className="rounded bg-red-500/20 border border-red-500/30 px-2 py-1 text-xs text-red-100">
+                <span key={key} className="rounded bg-rose-500/20 border border-rose-500/30 px-2 py-1 text-xs text-rose-100">
                   {key}: {value}
                 </span>
               ))}
@@ -259,7 +272,7 @@ export default function SearchDiagnostics() {
             <div className="px-4 py-3 border-b border-gray-800 text-sm font-semibold">Indexer Reliability</div>
             <div className="divide-y divide-gray-800">
               {reliability.length === 0 ? (
-                <p className="px-4 py-4 text-sm text-gray-500">No reliability data yet.</p>
+                <EmptyState compact title="No reliability data yet" />
               ) : reliability.map(([name, item]) => (
                 <div key={name} className="px-4 py-3 text-sm">
                   <div className="flex items-center justify-between gap-3">
@@ -269,8 +282,8 @@ export default function SearchDiagnostics() {
                   <p className="text-xs text-gray-500 mt-1">
                     Requests {String(item.requests ?? 0)} - Failures {String(item.failures ?? 0)} - Timeouts {String(item.timeouts ?? 0)} - Quota {String(item.rate_limited ?? 0)} - Avg {fmtMs(item.avg_latency_ms)}
                   </p>
-                  {item.last_rate_limit_at ? <p className="text-xs text-yellow-200 mt-1">Last quota/rate limit: {fmtTime(item.last_rate_limit_at)}</p> : null}
-                  {item.last_error ? <p className="text-xs text-red-300 mt-1 truncate">{String(item.last_error)}</p> : null}
+                  {item.last_rate_limit_at ? <p className="text-xs text-amber-200 mt-1">Last quota/rate limit: {fmtTime(item.last_rate_limit_at)}</p> : null}
+                  {item.last_error ? <p className="text-xs text-rose-300 mt-1 truncate">{String(item.last_error)}</p> : null}
                 </div>
               ))}
             </div>
@@ -327,7 +340,7 @@ export default function SearchDiagnostics() {
           </div>
           <div className="divide-y divide-gray-700 max-h-80 overflow-y-auto">
             {!history?.items?.length ? (
-              <p className="px-3 py-3 text-xs text-gray-500">No persisted history records found.</p>
+              <EmptyState compact title="No persisted history records found" />
             ) : history.items.map((item, idx) => (
               <div key={`${item.timestamp}-${idx}`} className="px-3 py-2 text-xs">
                 <p className="text-gray-200 break-all">{String(item.type || 'event')} - {String(item.indexer_name || item.provider || item.title || 'n/a')}</p>
@@ -398,11 +411,11 @@ export default function SearchDiagnostics() {
               <div className="px-3 py-2 border-b border-gray-700 text-xs font-semibold">Accepted Results</div>
               <div className="divide-y divide-gray-700 max-h-80 overflow-y-auto">
                 {testResult.accepted_results.length === 0 ? (
-                  <p className="px-3 py-3 text-xs text-gray-500">No accepted results.</p>
+                  <EmptyState compact title="No accepted results" />
                 ) : testResult.accepted_results.slice(0, 25).map((result, idx) => (
                   <div key={idx} className="px-3 py-2 text-xs">
                     <p className="text-gray-200 truncate">{String(result.release_title ?? 'Untitled')}</p>
-                    <p className="text-green-300 mt-1">
+                    <p className="text-emerald-300 mt-1">
                       {String(result.media_health_rating ?? 'Accepted')} - confidence {String(result.confidence_score ?? 'n/a')}
                     </p>
                   </div>
@@ -414,11 +427,11 @@ export default function SearchDiagnostics() {
               <div className="px-3 py-2 border-b border-gray-700 text-xs font-semibold">Rejected Results</div>
               <div className="divide-y divide-gray-700 max-h-80 overflow-y-auto">
                 {testResult.rejected_results.length === 0 ? (
-                  <p className="px-3 py-3 text-xs text-gray-500">No rejected results.</p>
+                  <EmptyState compact title="No rejected results" />
                 ) : testResult.rejected_results.slice(0, 25).map((result, idx) => (
                   <div key={idx} className="px-3 py-2 text-xs">
                     <p className="text-gray-200 truncate">{String(result.release_title ?? 'Untitled')}</p>
-                    <p className="text-red-300 mt-1">{String(result.reject_reason ?? 'Rejected')}</p>
+                    <p className="text-rose-300 mt-1">{String(result.reject_reason ?? 'Rejected')}</p>
                   </div>
                 ))}
               </div>

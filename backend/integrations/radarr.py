@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import httpx
+from loguru import logger
 
 from backend.config import get_config
 
@@ -92,8 +93,8 @@ class RadarrClient:
             if movie:
                 await self.rescan_movie(movie["id"])
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Radarr rescan_by_imdb failed for imdb_id={}: {}", imdb_id, e)
         return False
 
     async def post_replace_action(self, imdb_id: str, action: str) -> bool:
@@ -113,8 +114,10 @@ class RadarrClient:
             if action == "rescan_unmonitor":
                 await self.unmonitor_movie(movie["id"], dict(movie))
             return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "Radarr post_replace_action({!r}) failed for imdb_id={}: {}", action, imdb_id, e
+            )
         return False
 
     async def test_connection(self) -> dict:

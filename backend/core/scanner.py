@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 from sqlalchemy import select
@@ -20,6 +20,13 @@ from backend.realtime.events import emit_event
 
 _scan_running = False
 _scan_lock = asyncio.Lock()
+
+# A movie whose TMDB lookup never resolves (e.g. a delisted/mismatched
+# tmdb_id) has no poster forever, so `needs_poster` stays true and the scanner
+# retries the same failing lookup on every single scan indefinitely. Skip
+# retrying for a while after a failure instead of hitting TMDB again next scan.
+_TMDB_ENRICHMENT_RETRY_COOLDOWN = timedelta(hours=24)
+_tmdb_enrichment_failed_until: dict[str, datetime] = {}
 
 
 def is_scan_running() -> bool:
@@ -62,7 +69,11 @@ async def _run_scan() -> int:
     tmdb = TMDBClient()
 
     try:
-        plex_movies = plex.get_all_movies()
+        # get_all_movies() is a synchronous plexapi call that walks every
+        # section/movie/part over HTTP; run it off the event loop so a large
+        # library or a slow Plex server doesn't stall the whole app (API
+        # requests, the scheduler, WS events) for the whole scan.
+        plex_movies = await asyncio.to_thread(plex.get_all_movies)
     except Exception as e:
         logger.error("Plex connection failed during scan: {}", redact_text(str(e)))
         return 0
@@ -95,9 +106,14 @@ async def _run_scan() -> int:
                 existing_video_codec = existing.video_codec if existing else None
                 existing_audio_codec = existing.audio_codec if existing else None
                 existing_resolution = existing.resolution if existing else None
+                existing_file_size = existing.file_size if existing else None
 
             if needs_poster:
-                if config.tmdb.api_key:
+                rating_key = pm["plex_rating_key"]
+                retry_after = _tmdb_enrichment_failed_until.get(rating_key)
+                skip_tmdb = bool(retry_after and retry_after > datetime.now(timezone.utc))
+
+                if config.tmdb.api_key and not skip_tmdb:
                     try:
                         tmdb_data = None
                         imdb_id = pm.get("imdb_id") or existing_imdb
@@ -116,11 +132,19 @@ async def _run_scan() -> int:
                             genres = tmdb_data.get("genres") or []
                             if genres and isinstance(genres[0], dict):
                                 genres_json = json.dumps([g["name"] for g in genres])
+                            _tmdb_enrichment_failed_until.pop(rating_key, None)
+                        else:
+                            _tmdb_enrichment_failed_until[rating_key] = (
+                                datetime.now(timezone.utc) + _TMDB_ENRICHMENT_RETRY_COOLDOWN
+                            )
                     except Exception as te:
                         logger.warning(
                             "TMDB lookup failed for {}: {}",
                             pm["title"],
                             redact_text(str(te)),
+                        )
+                        _tmdb_enrichment_failed_until[rating_key] = (
+                            datetime.now(timezone.utc) + _TMDB_ENRICHMENT_RETRY_COOLDOWN
                         )
 
                 if not poster_path and config.radarr.enabled and (pm.get("imdb_id") or existing_imdb):
@@ -149,7 +173,10 @@ async def _run_scan() -> int:
             probe: dict[str, object] = {}
             file_path = pm.get("file_path")
             files_config = getattr(config, "files", None)
-            enable_media_probe = bool(getattr(files_config, "enable_media_probe", True))
+            # Fallback must match FilesConfig.enable_media_probe's actual default
+            # (False) — a mismatched fallback here previously masked a real bug
+            # elsewhere (replace_file skipping its post-replacement probe).
+            enable_media_probe = bool(getattr(files_config, "enable_media_probe", False))
             nas_prefixes: list[str] = list(getattr(files_config, "nas_path_prefixes", None) or [])
 
             # Determine whether a probe is actually needed:
@@ -157,11 +184,17 @@ async def _run_scan() -> int:
             # 2. Neither Plex nor the existing DB record have complete metadata.
             #    (Plex rarely returns bitrate, so we check the DB to avoid re-probing
             #     every scan for files that have already been characterised.)
+            file_size_changed_for_probe = bool(
+                existing_file_size
+                and pm.get("file_size")
+                and pm.get("file_size") != existing_file_size
+            )
             db_has_full_probe = bool(
                 existing_bitrate
                 and existing_video_codec
                 and existing_audio_codec
                 and existing_resolution
+                and not file_size_changed_for_probe
             )
             plex_has_full_probe = bool(
                 pm.get("bitrate")
@@ -224,11 +257,39 @@ async def _run_scan() -> int:
                 movie.imdb_id = pm.get("imdb_id") or movie.imdb_id
                 movie.tmdb_id = tmdb_id_found or pm.get("tmdb_id") or movie.tmdb_id
                 movie.file_path = pm.get("file_path")
-                movie.file_size = pm.get("file_size") or 0
-                movie.resolution = normalize_resolution(pm.get("resolution") or probe.get("resolution") or "")
-                movie.video_codec = normalize_codec(pm.get("video_codec") or probe.get("video_codec") or "")
-                movie.audio_codec = pm.get("audio_codec") or probe.get("audio_codec")
-                movie.bitrate = pm.get("bitrate") or probe.get("bitrate_kbps") or 0
+                new_file_size = pm.get("file_size") or 0
+
+                # Plex reports file size from a cheap filesystem stat, so it's
+                # always current — but it only re-analyzes the actual media
+                # streams (resolution/codec/bitrate) on a deep scan, which a
+                # plain library refresh doesn't guarantee. If the size changed
+                # since our last scan (e.g. replace_file() just swapped the
+                # file), Plex's stream fields may still describe the old file.
+                # Trust whatever replace_file() already probed and wrote to
+                # the DB in that case instead of letting stale Plex data
+                # overwrite it and re-trigger a replacement loop.
+                file_changed = bool(
+                    existing_file_size and new_file_size and new_file_size != existing_file_size
+                )
+                stale_plex_stream_data = file_changed and not probe
+
+                movie.file_size = new_file_size
+                if stale_plex_stream_data and existing_resolution:
+                    movie.resolution = existing_resolution
+                else:
+                    movie.resolution = normalize_resolution(pm.get("resolution") or probe.get("resolution") or "")
+                if stale_plex_stream_data and existing_video_codec:
+                    movie.video_codec = existing_video_codec
+                else:
+                    movie.video_codec = normalize_codec(pm.get("video_codec") or probe.get("video_codec") or "")
+                if stale_plex_stream_data and existing_audio_codec:
+                    movie.audio_codec = existing_audio_codec
+                else:
+                    movie.audio_codec = pm.get("audio_codec") or probe.get("audio_codec")
+                if stale_plex_stream_data and existing_bitrate:
+                    movie.bitrate = existing_bitrate
+                else:
+                    movie.bitrate = pm.get("bitrate") or probe.get("bitrate_kbps") or 0
                 movie.last_scanned = datetime.now(timezone.utc)
 
                 if movie.original_file_size is None:

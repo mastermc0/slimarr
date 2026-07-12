@@ -91,6 +91,53 @@ async def is_blacklisted(
     return None
 
 
+async def get_blacklist_reasons(
+    candidates: list[tuple[str, Optional[str], Optional[str]]],
+) -> dict[int, str]:
+    """Batched form of is_blacklisted() for a list of
+    (release_title, uploader, indexer_name) tuples. Returns a dict of
+    candidate index -> blacklist reason for any that are blacklisted (and not
+    expired), using a single query instead of one per candidate — used by the
+    retry ladder, which may need to check dozens of candidates per retry.
+    """
+    if not candidates:
+        return {}
+
+    hash_to_indices: dict[str, list[int]] = {}
+    for i, (release_title, uploader, indexer_name) in enumerate(candidates):
+        for hash_input in (
+            f"{release_title.lower()}:{uploader or ''}:{indexer_name or ''}",
+            f"{release_title.lower()}:{uploader or ''}:",
+        ):
+            h = hashlib.md5(hash_input.encode()).hexdigest()
+            hash_to_indices.setdefault(h, []).append(i)
+
+    now = datetime.now(timezone.utc)
+    reasons: dict[int, str] = {}
+    async with async_session() as session:
+        result = await session.execute(
+            select(DownloadBlacklist).where(
+                DownloadBlacklist.release_hash.in_(hash_to_indices.keys())
+            )
+        )
+        entries = result.scalars().all()
+
+        expired = []
+        for entry in entries:
+            if entry.expires_at and entry.expires_at < now:
+                expired.append(entry)
+                continue
+            for i in hash_to_indices.get(entry.release_hash, []):
+                reasons.setdefault(i, entry.reason)
+
+        if expired:
+            for entry in expired:
+                await session.delete(entry)
+            await session.commit()
+
+    return reasons
+
+
 async def remove_from_blacklist(release_hash: str) -> bool:
     """Manually remove a blacklist entry."""
     async with async_session() as session:

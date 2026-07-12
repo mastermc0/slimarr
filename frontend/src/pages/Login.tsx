@@ -48,8 +48,8 @@ export default function Login() {
         </div>
 
         {authError && (
-          <div className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-100">
-            {authError} If this is first launch, give the tray app a few seconds and refresh.
+          <div className="mb-4 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
+            {authError} Retrying automatically — this usually clears within a few seconds on first launch.
           </div>
         )}
 

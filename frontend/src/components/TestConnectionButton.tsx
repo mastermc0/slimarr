@@ -34,7 +34,7 @@ export default function TestConnectionButton({ service, label, body }: Props) {
         {loading ? 'Testing…' : label ?? 'Test Connection'}
       </button>
       {result && (
-        <span className={result.success ? 'text-green-400 text-xs' : 'text-red-400 text-xs'}>
+        <span className={result.success ? 'text-emerald-300 text-xs' : 'text-rose-300 text-xs'}>
           {result.success ? '✓ Connected' : `✗ ${result.message}`}
         </span>
       )}

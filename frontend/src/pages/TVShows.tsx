@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { memo, useEffect, useState, useCallback } from 'react'
 import { api } from '@/lib/api'
 import { useToast } from '@/components/Toast'
 import { Tv2, Eye, Trash2, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
@@ -47,7 +47,6 @@ function staleness(show: TVShow, staleDays: number): 'never' | 'stale' | 'watche
 interface ShowRowProps {
   show: TVShow
   staleDays: number
-  sonarrEnabled: boolean
   onDelete: (show: TVShow) => void
 }
 
@@ -56,10 +55,10 @@ function ShowRow({ show, staleDays, onDelete }: ShowRowProps) {
   const s = staleness(show, staleDays)
 
   return (
-    <div className={`bg-gray-900 rounded-xl overflow-hidden transition-all ${s === 'never' ? 'ring-1 ring-red-800/50' : s === 'stale' ? 'ring-1 ring-yellow-800/40' : ''}`}>
+    <div className={`bg-gray-900 rounded-xl overflow-hidden transition-all ${s === 'never' ? 'ring-1 ring-rose-800/50' : s === 'stale' ? 'ring-1 ring-amber-800/40' : ''}`}>
       <div className="flex items-center gap-4 p-4">
         {/* Status indicator */}
-        <div className={`w-2 h-2 rounded-full shrink-0 ${s === 'never' ? 'bg-red-500' : s === 'stale' ? 'bg-yellow-500' : 'bg-green-500'}`} title={s === 'never' ? 'Never watched' : s === 'stale' ? 'Not watched recently' : 'Watched'} />
+        <div className={`w-2 h-2 rounded-full shrink-0 ${s === 'never' ? 'bg-rose-500' : s === 'stale' ? 'bg-amber-500' : 'bg-emerald-500'}`} title={s === 'never' ? 'Never watched' : s === 'stale' ? 'Not watched recently' : 'Watched'} />
 
         {/* Title + meta */}
         <div className="flex-1 min-w-0">
@@ -70,7 +69,7 @@ function ShowRow({ show, staleDays, onDelete }: ShowRowProps) {
           <div className="flex items-center gap-3 mt-0.5">
             <span className="text-xs text-gray-400">{show.episode_count} eps</span>
             <span className="text-xs text-gray-400">·</span>
-            <span className={`text-xs font-medium ${s === 'never' ? 'text-red-400' : s === 'stale' ? 'text-yellow-400' : 'text-gray-400'}`}>
+            <span className={`text-xs font-medium ${s === 'never' ? 'text-rose-400' : s === 'stale' ? 'text-amber-400' : 'text-gray-400'}`}>
               {s === 'never'
                 ? 'Never watched'
                 : `Last watched ${fmtDate(show.last_watched_at)}`}
@@ -86,7 +85,7 @@ function ShowRow({ show, staleDays, onDelete }: ShowRowProps) {
 
         {/* Size badge */}
         <div className="text-right shrink-0">
-          <span className={`text-sm font-bold ${s === 'never' ? 'text-red-300' : 'text-gray-300'}`}>
+          <span className={`text-sm font-bold ${s === 'never' ? 'text-rose-300' : 'text-gray-300'}`}>
             {fmtSize(show.total_size_bytes)}
           </span>
         </div>
@@ -102,7 +101,7 @@ function ShowRow({ show, staleDays, onDelete }: ShowRowProps) {
           </button>
           <button
             onClick={() => onDelete(show)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-900/60 hover:bg-red-700 text-red-300 hover:text-white text-xs transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-900/60 hover:bg-rose-700 text-rose-300 hover:text-white text-xs transition-colors"
             title="Delete this show"
           >
             <Trash2 size={13} />
@@ -136,6 +135,8 @@ function ShowRow({ show, staleDays, onDelete }: ShowRowProps) {
   )
 }
 
+const MemoizedShowRow = memo(ShowRow)
+
 export default function TVShows() {
   const { toast } = useToast()
   const [data, setData] = useState<ShowsResponse | null>(null)
@@ -147,11 +148,19 @@ export default function TVShows() {
   const [sonarrEnabled, setSonarrEnabled] = useState(false)
   const [unmonitorSonarr, setUnmonitorSonarr] = useState(true)
 
+  const requestDelete = useCallback((s: TVShow) => {
+    setUnmonitorSonarr(true)
+    setPendingDelete(s)
+  }, [])
+
   useEffect(() => {
     api.getSettings().then((s: Record<string, unknown>) => {
       const sonarr = s?.sonarr as Record<string, unknown> | undefined
       setSonarrEnabled(!!(sonarr?.enabled && sonarr?.url && sonarr?.api_key))
-    }).catch(() => {})
+    }).catch(() => {
+      toast('Failed to load Sonarr settings', 'error')
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const load = useCallback(() => {
@@ -256,11 +265,11 @@ export default function TVShows() {
             <p className="text-xs text-gray-400 mt-1">Shows shown</p>
           </div>
           <div className="bg-gray-900 rounded-xl p-4 text-center">
-            <p className="text-2xl font-bold text-red-400">{data.shows.filter((s) => s.never_watched).length}</p>
+            <p className="text-2xl font-bold text-rose-400">{data.shows.filter((s) => s.never_watched).length}</p>
             <p className="text-xs text-gray-400 mt-1">Never watched</p>
           </div>
           <div className="bg-gray-900 rounded-xl p-4 text-center">
-            <p className="text-2xl font-bold text-yellow-300">{fmtSize(totalStaleSize)}</p>
+            <p className="text-2xl font-bold text-amber-300">{fmtSize(totalStaleSize)}</p>
             <p className="text-xs text-gray-400 mt-1">Reclaimable</p>
           </div>
         </div>
@@ -269,9 +278,9 @@ export default function TVShows() {
       {/* Legend */}
       {data && (
         <div className="flex items-center gap-4 text-xs text-gray-500">
-          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" /> Never watched</span>
-          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-yellow-500 inline-block" /> Not watched within filter period</span>
-          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-green-500 inline-block" /> Watched recently</span>
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-rose-500 inline-block" /> Never watched</span>
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> Not watched within filter period</span>
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Watched recently</span>
         </div>
       )}
 
@@ -301,12 +310,11 @@ export default function TVShows() {
       {data && data.shows.length > 0 && (
         <div className="space-y-3">
           {data.shows.map((show) => (
-            <ShowRow
+            <MemoizedShowRow
               key={show.plex_rating_key}
               show={show}
               staleDays={staleDays === 9999 ? 0 : staleDays}
-              sonarrEnabled={sonarrEnabled}
-              onDelete={(s) => { setUnmonitorSonarr(true); setPendingDelete(s) }}
+              onDelete={requestDelete}
             />
           ))}
         </div>
@@ -336,7 +344,7 @@ export default function TVShows() {
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-400">Disk usage</span>
-                <span className="text-red-300 font-medium">{fmtSize(pendingDelete.total_size_bytes)}</span>
+                <span className="text-rose-300 font-medium">{fmtSize(pendingDelete.total_size_bytes)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-400">Last watched</span>

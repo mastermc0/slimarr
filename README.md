@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/react-18-61DAFB?logo=react&logoColor=black" />
   <img src="https://img.shields.io/badge/license-MIT-green" />
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20Docker%20%7C%20Windows-0ea5e9" />
-  <img src="https://img.shields.io/badge/release-1.7.1.0-success" />
+  <img src="https://img.shields.io/badge/release-1.8.0.0-success" />
 </p>
 
 <p align="center">
@@ -36,7 +36,41 @@ Scan Plex library -> Search Usenet indexers -> Compare releases
 
 Slimarr is designed to look and feel like a native member of the **\*arr ecosystem** (Radarr, Sonarr, Prowlarr). If you're familiar with those tools, you'll feel right at home.
 
-Current release: **1.7.1.0** (2026-07-04).
+Current release: **1.8.0.0** (2026-07-12).
+
+### What's New in 1.8.0.0 - Optimization, Observability, and Premium Polish Pass
+
+- **Fixed the replace-loop bug for real this time.** The 1.7.1.0 fix only
+  re-probed a replaced file's resolution/codec/bitrate when
+  `files.enable_media_probe` was explicitly turned on — but that setting
+  defaults to off, so anyone who hadn't enabled it got no benefit at all.
+  The post-replacement probe now always runs (it's one file, not a bulk
+  scan), and the scanner no longer lets a possibly-stale Plex read clobber
+  it on the next pass.
+- **Fixed a second, still-active replace-loop cause found in live logs:** a
+  movie failing to replace every night because the existing file was
+  briefly locked by another process (`[WinError 32]`) — both the recycle
+  move and the fallback backup-move now retry a few times before giving up,
+  since this kind of lock is almost always transient.
+- **Performance:** the Plex library scan no longer blocks the whole app
+  (API requests, scheduler, live updates) for its full duration; the retry
+  ladder's blacklist check went from one query per candidate to one query
+  total; the orphan scanner's per-history-item DB checks (up to 5,000 items)
+  are now a single batched query; the NAS-pressure panel no longer pulls
+  every rejection reason into Python just to count a substring match.
+- **Observability:** silently-swallowed Radarr/uploader-health errors now
+  log with context; a dead download client no longer floods the log with
+  an identical warning every 5 seconds; a movie whose TMDB lookup
+  permanently 404s no longer retries every single scan forever.
+- **UI/UX polish pass:** unified inconsistent status-color palettes and
+  loading/empty states across most pages, fixed a sidebar nav bug that
+  double-highlighted parent/child routes, deduplicated ~200 lines of
+  copy-pasted NAS-preset logic between Dashboard and System into a shared
+  hook, memoized several list components, and fixed a login-page bug where
+  a transient startup connectivity error permanently locked out the form
+  until a manual refresh.
+
+Full standalone release notes: `docs/CHANGELOG_v1.8.0.0.md`.
 
 ### What's New in 1.7.1.0 - Replacement-Loop Fix and UI Correctness Patches
 
@@ -266,11 +300,11 @@ docker compose -f docker-compose.postgres.yml up -d
 
 ### Option B - Windows installer
 
-Download `SlimarrSetup-1.7.1.0.exe` (or the latest `SlimarrSetup-*.exe`) from the [Releases](https://github.com/theantipopau/slimarr/releases) page and run it. The installer bundles Python and all dependencies - no manual setup required. After install, Slimarr appears in the Start Menu and optionally the system tray on login.
+Download `SlimarrSetup-1.8.0.0.exe` (or the latest `SlimarrSetup-*.exe`) from the [Releases](https://github.com/theantipopau/slimarr/releases) page and run it. The installer bundles Python and all dependencies - no manual setup required. After install, Slimarr appears in the Start Menu and optionally the system tray on login.
 
 At the end of setup, the installer shows `Start Slimarr now` (checked by default). If selected, Slimarr starts minimized with the tray icon available and your browser opens automatically to `http://localhost:9494` when the backend is ready.
 
-`1.7.1.0` is the current release target. Newer `main` branch changes may land before the next installer is cut; if you want those immediately, run Slimarr from source or Docker.
+`1.8.0.0` is the current release target. Newer `main` branch changes may land before the next installer is cut; if you want those immediately, run Slimarr from source or Docker.
 
 ### Option C - From source
 
@@ -534,7 +568,7 @@ slimarr/
 |   `-- src/
 |       |-- pages/    # Dashboard, Library, MovieDetail, Queue, Activity, Settings, System, TVShows
 |       |-- components/ # PosterCard, StatCard, QualityBadge, Toast, Sidebar, Layout
-|       |-- hooks/    # useSocket, useAuth
+|       |-- hooks/    # useSocket, useAuth, useNasPreset
 |       `-- lib/      # api.ts, socket.ts, types.ts
 |-- data/             # SQLite DB, MediaCover image cache, recycling bin
 |-- docs/             # GitHub Pages website and Docker deployment guide

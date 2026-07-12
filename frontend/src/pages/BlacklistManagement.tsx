@@ -85,7 +85,7 @@ export default function BlacklistManagement() {
         />
         <button
           onClick={addEntry}
-          className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-sm"
+          className="px-3 py-1.5 rounded bg-brand-green hover:bg-green-600 text-sm text-white"
         >
           Add to Blacklist
         </button>

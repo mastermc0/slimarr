@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { useToast } from '@/components/Toast'
+import { Skeleton } from '@/components/Skeleton'
 import { Server, HardDrive, Container, AlertTriangle, CheckCircle, XCircle, RefreshCw, Copy } from 'lucide-react'
 
 interface DirCheck {
@@ -60,16 +62,16 @@ function fmtBytes(b: number | null): string {
 }
 
 function StatusIcon({ ok, warn }: { ok: boolean; warn?: boolean }) {
-  if (!ok) return <XCircle className="w-4 h-4 text-red-400 shrink-0" />
-  if (warn) return <AlertTriangle className="w-4 h-4 text-yellow-400 shrink-0" />
-  return <CheckCircle className="w-4 h-4 text-green-400 shrink-0" />
+  if (!ok) return <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+  if (warn) return <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+  return <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
 }
 
 function DiskStatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
-    ok: 'bg-green-900/40 text-green-300',
-    warn: 'bg-yellow-900/40 text-yellow-300',
-    critical: 'bg-red-900/40 text-red-300',
+    ok: 'bg-emerald-900/40 text-emerald-300',
+    warn: 'bg-amber-900/40 text-amber-300',
+    critical: 'bg-rose-900/40 text-rose-300',
     unknown: 'bg-gray-700 text-gray-400',
   }
   return (
@@ -106,20 +108,29 @@ export default function ContainerDiagnostics() {
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
 
+  const { toast } = useToast()
+
   const load = () => {
     setLoading(true)
     api.startupContext()
       .then((d) => setData(d as StartupPayload))
-      .catch(() => setData(null))
+      .catch(() => {
+        setData(null)
+        toast('Failed to load container/environment info', 'error')
+      })
       .finally(() => setLoading(false))
   }
 
   useEffect(() => { load() }, [])
 
   const copyCompose = async () => {
-    await navigator.clipboard.writeText(DOCKER_COMPOSE_EXAMPLE)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    try {
+      await navigator.clipboard.writeText(DOCKER_COMPOSE_EXAMPLE)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      toast('Failed to copy to clipboard', 'error')
+    }
   }
 
   const ctx = data?.context
@@ -150,19 +161,22 @@ export default function ContainerDiagnostics() {
 
       {/* Startup warnings */}
       {warnings.length > 0 && (
-        <div className="bg-yellow-900/20 border border-yellow-800/40 rounded-lg p-4 space-y-1">
-          <p className="text-sm font-medium text-yellow-300 flex items-center gap-1.5">
+        <div className="bg-amber-900/20 border border-amber-800/40 rounded-lg p-4 space-y-1">
+          <p className="text-sm font-medium text-amber-300 flex items-center gap-1.5">
             <AlertTriangle className="w-4 h-4" />
             {warnings.length} startup warning{warnings.length > 1 ? 's' : ''}
           </p>
           {warnings.map((w, i) => (
-            <p key={i} className="text-xs text-yellow-200/80 ml-5">{w}</p>
+            <p key={i} className="text-xs text-amber-200/80 ml-5">{w}</p>
           ))}
         </div>
       )}
 
       {loading && !ctx && (
-        <div className="text-sm text-gray-500 animate-pulse">Loading environment info…</div>
+        <div className="space-y-3">
+          <Skeleton className="h-24 w-full rounded-lg" />
+          <Skeleton className="h-24 w-full rounded-lg" />
+        </div>
       )}
 
       {ctx && (
@@ -203,7 +217,7 @@ export default function ContainerDiagnostics() {
                   <span className="text-gray-400 w-28 shrink-0">{d.label}</span>
                   <code className="text-gray-300 text-xs font-mono">{d.path}</code>
                   {d.error && (
-                    <span className="text-red-400 text-xs ml-2">{d.error}</span>
+                    <span className="text-rose-400 text-xs ml-2">{d.error}</span>
                   )}
                 </div>
               ))}
@@ -222,12 +236,12 @@ export default function ContainerDiagnostics() {
               <span className="text-gray-500 text-xs">at {ctx.disk.path}</span>
             </div>
             {ctx.disk.status === 'critical' && (
-              <p className="text-xs text-red-400 mt-2">
+              <p className="text-xs text-rose-400 mt-2">
                 Critically low disk space. Downloads will likely fail. Free up space or extend the volume.
               </p>
             )}
             {ctx.disk.status === 'warn' && (
-              <p className="text-xs text-yellow-400 mt-2">
+              <p className="text-xs text-amber-400 mt-2">
                 Low disk space. Consider expanding the data volume soon.
               </p>
             )}

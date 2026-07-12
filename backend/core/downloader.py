@@ -173,6 +173,7 @@ async def monitor_download(download_id: int, poll_interval: int = 5) -> str:
     Returns final status: "completed" | "failed" | "missing"
     """
     consecutive_none = 0  # count polls where job is not found at all
+    consecutive_poll_errors = 0  # count polls where the client call itself raised
     MAX_NONE_RETRIES = 6  # ~30s of grace before giving up
     max_active_hours = _max_active_download_hours()
 
@@ -207,13 +208,21 @@ async def monitor_download(download_id: int, poll_interval: int = 5) -> str:
 
             try:
                 status = await client.get_job_status(external_job_id)
+                consecutive_poll_errors = 0
             except Exception as e:
-                logger.warning(
-                    "{} poll error for download {}: {}",
-                    client_name,
-                    download_id,
-                    redact_text(str(e)),
-                )
+                consecutive_poll_errors += 1
+                # If the client is genuinely down, this poll runs every
+                # `poll_interval` seconds forever — log the first failure at
+                # warning so it's visible, then back off to a periodic
+                # reminder instead of repeating the identical line every poll.
+                if consecutive_poll_errors == 1 or consecutive_poll_errors % 12 == 0:
+                    logger.warning(
+                        "{} poll error for download {} (consecutive failures: {}): {}",
+                        client_name,
+                        download_id,
+                        consecutive_poll_errors,
+                        redact_text(str(e)),
+                    )
                 continue
 
             if status is None:

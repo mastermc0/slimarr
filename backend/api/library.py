@@ -29,6 +29,8 @@ async def list_movies(
     sort: str = "title",
     user=Depends(get_current_user),
 ):
+    page = max(1, page)
+    per_page = max(1, min(per_page, 200))
     async with async_session() as db:
         query = select(Movie)
         if search:
@@ -78,12 +80,14 @@ async def get_movie(movie_id: int, user=Depends(get_current_user)):
 
 
 @router.get("/movies/{movie_id}/search-results", response_model=list[SearchResultOut])
-async def get_search_results(movie_id: int, user=Depends(get_current_user)):
+async def get_search_results(movie_id: int, limit: int = 200, user=Depends(get_current_user)):
+    limit = max(1, min(limit, 500))
     async with async_session() as db:
         result = await db.execute(
             select(SearchResult)
             .where(SearchResult.movie_id == movie_id)
             .order_by(SearchResult.score.desc())
+            .limit(limit)
         )
         srs = result.scalars().all()
     return [_sr_dict(s) for s in srs]

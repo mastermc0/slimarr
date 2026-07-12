@@ -50,6 +50,12 @@ class ScannerMediaProbeTests(unittest.IsolatedAsyncioTestCase):
             plex=SimpleNamespace(url="http://plex", token="token", library_sections=[]),
             tmdb=SimpleNamespace(api_key=""),
             radarr=SimpleNamespace(enabled=False),
+            files=SimpleNamespace(
+                enable_media_probe=True,
+                nas_probe_enabled=True,
+                nas_path_prefixes=[],
+                media_probe_timeout_seconds=30,
+            ),
         )
         plex_movies = [
             {
@@ -75,10 +81,19 @@ class ScannerMediaProbeTests(unittest.IsolatedAsyncioTestCase):
             "bitrate_kbps": 3200,
         }
 
+        # asyncio.to_thread is now used for both the Plex library fetch (called
+        # with no extra args) and the media probe (called with a file path) —
+        # route each through based on call shape since func is a patched Mock
+        # here and doesn't carry a real __name__.
+        async def fake_to_thread(func, *args, **kwargs):
+            if not args:
+                return plex_movies
+            return probe_result
+
         with patch("backend.config.get_config", return_value=cfg), patch(
             "backend.core.scanner.async_session", session_factory
         ), patch("backend.core.scanner.emit_event", AsyncMock()), patch(
-            "backend.core.scanner.asyncio.to_thread", AsyncMock(return_value=probe_result)
+            "backend.core.scanner.asyncio.to_thread", AsyncMock(side_effect=fake_to_thread)
         ) as to_thread, patch(
             "backend.integrations.plex.PlexClient.get_all_movies", return_value=plex_movies
         ), patch(
@@ -87,7 +102,7 @@ class ScannerMediaProbeTests(unittest.IsolatedAsyncioTestCase):
             processed = await _run_scan()
 
         self.assertEqual(1, processed)
-        to_thread.assert_awaited_once()
+        self.assertEqual(2, to_thread.await_count)
 
         # The write session is the second one per movie.
         written = session_factory.sessions[1].added[0]

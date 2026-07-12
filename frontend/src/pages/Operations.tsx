@@ -65,7 +65,7 @@ const STATUS_STYLES: Record<string, string> = {
   running: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20',
   cancelling: 'bg-amber-500/15 text-amber-300 border-amber-500/20',
   completed: 'bg-gray-500/15 text-gray-400 border-gray-500/20',
-  failed: 'bg-red-500/15 text-red-300 border-red-500/20',
+  failed: 'bg-rose-500/15 text-rose-300 border-rose-500/20',
   cancelled: 'bg-gray-500/15 text-gray-500 border-gray-600/20',
   recovery_required: 'bg-orange-500/15 text-orange-300 border-orange-500/20',
 }
@@ -82,7 +82,7 @@ function StatusPill({ status }: { status: string }) {
 
 function OpStatusDot({ status }: { status: string }) {
   if (status === 'completed') return <CheckCircle size={13} className="text-emerald-400 shrink-0" />
-  if (status === 'failed') return <XCircle size={13} className="text-red-400 shrink-0" />
+  if (status === 'failed') return <XCircle size={13} className="text-rose-400 shrink-0" />
   if (status === 'skipped') return <AlertCircle size={13} className="text-amber-400 shrink-0" />
   return <Clock size={13} className="text-gray-500 shrink-0" />
 }
@@ -149,7 +149,7 @@ function JobRow({ job, onCancel, onRetry, actionInFlight }: JobRowProps) {
                 onClick={() => onCancel(job.id)}
                 disabled={busy || job.status === 'cancelling'}
                 title="Cancel job"
-                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-gray-400 hover:bg-red-500/10 hover:text-red-300 transition-colors disabled:opacity-40"
+                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-gray-400 hover:bg-rose-500/10 hover:text-rose-300 transition-colors disabled:opacity-40"
               >
                 {busy ? <Loader2 size={12} className="animate-spin" /> : <Square size={12} />}
                 Cancel
@@ -175,7 +175,7 @@ function JobRow({ job, onCancel, onRetry, actionInFlight }: JobRowProps) {
         <tr className="border-b border-white/5">
           <td colSpan={6} className="px-6 pb-3 pt-1">
             {job.error_message && (
-              <div className="mb-2 rounded-md bg-red-500/8 border border-red-500/20 px-3 py-2 text-xs text-red-300">
+              <div className="mb-2 rounded-md bg-rose-500/8 border border-rose-500/20 px-3 py-2 text-xs text-rose-300">
                 {job.error_message}
               </div>
             )}
@@ -374,7 +374,7 @@ export default function Operations() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setPurgeDialogOpen(true)}
-            className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-gray-400 hover:border-red-500/30 hover:text-red-300 transition-colors"
+            className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-gray-400 hover:border-rose-500/30 hover:text-rose-300 transition-colors"
             title="Purge records older than 30 days"
           >
             <Trash2 size={13} />
@@ -396,9 +396,9 @@ export default function Operations() {
           <div className="text-xs text-gray-500 mb-1">Active jobs</div>
           <div className="text-2xl font-bold text-white">{activeJobs.length}</div>
         </div>
-        <div className={`rounded-xl border px-4 py-3 ${failedJobs.length > 0 ? 'border-red-500/20 bg-red-500/5' : 'border-white/5 bg-gray-900/60'}`}>
+        <div className={`rounded-xl border px-4 py-3 ${failedJobs.length > 0 ? 'border-rose-500/20 bg-rose-500/5' : 'border-white/5 bg-gray-900/60'}`}>
           <div className="text-xs text-gray-500 mb-1">Failed / recovery needed</div>
-          <div className={`text-2xl font-bold ${failedJobs.length > 0 ? 'text-red-300' : 'text-white'}`}>{failedJobs.length}</div>
+          <div className={`text-2xl font-bold ${failedJobs.length > 0 ? 'text-rose-300' : 'text-white'}`}>{failedJobs.length}</div>
         </div>
         <div className={`rounded-xl border px-4 py-3 ${cooldownActive ? 'border-orange-500/20 bg-orange-500/5' : 'border-white/5 bg-gray-900/60'}`}>
           <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">

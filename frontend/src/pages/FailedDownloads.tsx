@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { useToast } from '@/components/Toast'
 import { useSocket } from '@/hooks/useSocket'
+import { SkeletonTable } from '@/components/Skeleton'
+import EmptyState from '@/components/EmptyState'
 import type { Download } from '@/lib/types'
 
 function fmt(bytes?: number) {
@@ -11,8 +13,8 @@ function fmt(bytes?: number) {
 }
 
 function cleanupStatusColor(status?: string) {
-  if (status === 'cleaned') return 'text-green-400'
-  if (status === 'error') return 'text-red-400'
+  if (status === 'cleaned') return 'text-emerald-300'
+  if (status === 'error') return 'text-rose-300'
   return 'text-gray-400'
 }
 
@@ -84,8 +86,11 @@ export default function FailedDownloads() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <p className="text-gray-400">Loading failed downloads...</p>
+      <div className="space-y-6">
+        <h1 className="text-2xl font-bold">Failed Downloads</h1>
+        <div className="bg-gray-900 rounded-xl p-4">
+          <SkeletonTable rows={3} />
+        </div>
       </div>
     )
   }
@@ -95,8 +100,8 @@ export default function FailedDownloads() {
       <h1 className="text-2xl font-bold">Failed Downloads</h1>
 
       {downloads.length === 0 ? (
-        <div className="bg-gray-900 rounded-xl p-6 text-center">
-          <p className="text-gray-400">No failed downloads</p>
+        <div className="bg-gray-900 rounded-xl">
+          <EmptyState title="No failed downloads" description="Everything is downloading cleanly." />
         </div>
       ) : (
         <div className="bg-gray-900 rounded-xl overflow-hidden">

@@ -1,7 +1,7 @@
 ﻿import type { Movie } from '@/lib/types'
 import QualityBadge from './QualityBadge'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { CheckCircle, Loader } from 'lucide-react'
 
 interface Props {
@@ -20,7 +20,7 @@ const statusBorder: Record<string, string> = {
   failed: 'border-red-500',
 }
 
-export default function PosterCard({ movie }: Props) {
+function PosterCard({ movie }: Props) {
   const navigate = useNavigate()
   const location = useLocation()
   const cardRef = useRef<HTMLDivElement | null>(null)
@@ -115,3 +115,5 @@ export default function PosterCard({ movie }: Props) {
     </div>
   )
 }
+
+export default memo(PosterCard)

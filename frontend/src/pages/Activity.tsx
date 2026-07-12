@@ -1,13 +1,16 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api } from '@/lib/api'
 import { useSocket } from '@/hooks/useSocket'
+import { useToast } from '@/components/Toast'
 import type { ActivityEntry } from '@/lib/types'
 import ActivityItem from '@/components/ActivityItem'
+import EmptyState from '@/components/EmptyState'
 
 export default function Activity() {
   const [activity, setActivity] = useState<ActivityEntry[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
+  const { toast } = useToast()
   const PER_PAGE = 50
 
   const load = useCallback(() => {
@@ -16,8 +19,8 @@ export default function Activity() {
         setActivity(d.activity)
         setTotal(d.total)
       })
-      .catch(() => {})
-  }, [page])
+      .catch(() => toast('Failed to load activity', 'error'))
+  }, [page, toast])
 
   useEffect(() => { load() }, [load])
 
@@ -41,7 +44,10 @@ export default function Activity() {
       </div>
       <div className="bg-gray-900 rounded-xl p-5">
         {activity.length === 0 ? (
-          <p className="text-gray-500 text-sm">No activity yet. Run a cycle or scan your library to get started.</p>
+          <EmptyState
+            title="No activity yet"
+            description="Run a cycle or scan your library to get started."
+          />
         ) : (
           <div className="divide-y divide-gray-800">
             {activity.map((e) => <ActivityItem key={e.id} entry={e} />)}

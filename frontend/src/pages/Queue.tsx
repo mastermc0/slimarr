@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { useSocket } from '@/hooks/useSocket'
 import type { Download } from '@/lib/types'
 import { Clock, RefreshCw } from 'lucide-react'
 import { SkeletonTable } from '@/components/Skeleton'
 import { useToast } from '@/components/Toast'
+import EmptyState from '@/components/EmptyState'
 
 function fmt(bytes?: number) {
   if (!bytes) return '-'
@@ -45,7 +46,19 @@ export default function Queue() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const { toast } = useToast()
 
+  // The 15s poll and up to 4 socket listeners can all ask for a reload close
+  // together while downloads are active. Coalesce overlapping calls instead
+  // of firing redundant concurrent requests: a call that arrives while one is
+  // already in flight just marks that another refresh is needed once it's done.
+  const loadInFlight = useRef(false)
+  const loadPending = useRef(false)
+
   const loadQueue = async () => {
+    if (loadInFlight.current) {
+      loadPending.current = true
+      return
+    }
+    loadInFlight.current = true
     try {
       const [activeRows, recentRows] = await Promise.all([
         api.activeDownloads(),
@@ -54,8 +67,15 @@ export default function Queue() {
       setActive(activeRows as Download[])
       setRecent(recentRows as Download[])
       setLastUpdated(new Date())
+    } catch {
+      toast('Failed to load queue', 'error')
     } finally {
       setLoading(false)
+      loadInFlight.current = false
+      if (loadPending.current) {
+        loadPending.current = false
+        void loadQueue()
+      }
     }
   }
 
@@ -157,7 +177,7 @@ export default function Queue() {
         {loading && active.length === 0 ? (
           <div className="p-4"><SkeletonTable rows={2} /></div>
         ) : active.length === 0 ? (
-          <p className="px-4 py-4 text-gray-500 text-sm">No active downloads.</p>
+          <EmptyState compact title="No active downloads" />
         ) : (
           <div className="divide-y divide-gray-800">
             {active.map((d) => {
@@ -208,7 +228,7 @@ export default function Queue() {
         </div>
         <div className="divide-y divide-gray-800">
           {filteredRecent.length === 0 && (
-            <p className="px-4 py-4 text-gray-500 text-sm">No downloads match this filter.</p>
+            <EmptyState compact title="No downloads match this filter" />
           )}
           {filteredRecent.map((d) => (
             <div key={d.id} className="px-4 py-3 flex flex-col gap-2 text-sm sm:flex-row sm:items-center sm:gap-4">

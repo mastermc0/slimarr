@@ -5,7 +5,7 @@ from typing import Optional
 from sqlalchemy import select
 from backend.database import async_session, Download, SearchResult
 from backend.config import get_config
-from backend.core.blacklist import add_to_blacklist, is_blacklisted
+from backend.core.blacklist import add_to_blacklist, get_blacklist_reasons
 from backend.core.parser import parse_release_title
 from loguru import logger
 
@@ -73,23 +73,22 @@ async def get_next_candidate(
         )
         candidates = candidates_result.scalars().all()
         
-        # Filter out already-attempted release and check blacklist
-        for candidate in candidates:
-            if candidate.release_title in attempted_titles:
+        # Filter out already-attempted releases, then check the rest against
+        # the blacklist in a single batched query instead of one query per
+        # candidate (a movie can have dozens of accepted candidates).
+        unattempted = [c for c in candidates if c.release_title not in attempted_titles]
+        parsed_by_candidate = [parse_release_title(c.release_title) for c in unattempted]
+        blacklist_keys = [
+            (c.release_title, parsed.uploader, c.indexer_name)
+            for c, parsed in zip(unattempted, parsed_by_candidate)
+        ]
+        blacklist_reasons = await get_blacklist_reasons(blacklist_keys)
+
+        for i, candidate in enumerate(unattempted):
+            reason = blacklist_reasons.get(i)
+            if reason:
+                logger.debug(f"Skipping blacklisted: {candidate.release_title} ({reason})")
                 continue
-            
-            # Check if blacklisted
-            parsed = parse_release_title(candidate.release_title)
-            blacklist_reason = await is_blacklisted(
-                candidate.release_title,
-                uploader=parsed.uploader,
-                indexer_name=candidate.indexer_name,
-            )
-            
-            if blacklist_reason:
-                logger.debug(f"Skipping blacklisted: {candidate.release_title} ({blacklist_reason})")
-                continue
-            
             return candidate
     
     return None

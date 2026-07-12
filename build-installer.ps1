@@ -1,5 +1,5 @@
 ﻿# build-installer.ps1 - Build the Slimarr Windows installer
-# Output: dist/installer/SlimarrSetup-1.7.1.0.exe
+# Output: dist/installer/SlimarrSetup-1.8.0.0.exe
 #
 # Prerequisites (install once):
 #   pip install pyinstaller -r requirements-tray.txt   (in your venv)
@@ -115,7 +115,7 @@ exit /b 0
 
 Write-Host ""
 Write-Host "  +-------------------------------------+" -ForegroundColor Green
-Write-Host "  |  Slimarr Installer Builder v1.7.1  |" -ForegroundColor Green
+Write-Host "  |  Slimarr Installer Builder v1.8.0  |" -ForegroundColor Green
 Write-Host "  +-------------------------------------+" -ForegroundColor Green
 
 # ---- 0. Sanity checks -------------------------------------------------------

@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from backend.core.media_probe import probe_media_file
 from backend.core.parser import normalize_codec, normalize_resolution
-from backend.core.storage import move_path, preflight_storage_path, remove_path
+from backend.core.storage import move_path, path_matches_prefix, preflight_storage_path, remove_path
 from backend.database import ActivityLog, Download, Movie, ReplacementRecoveryRecord, async_session
 from backend.realtime.events import emit_event
 
@@ -56,6 +56,50 @@ async def _disk_free(path: str) -> int:
 
 async def _find_video_file_async(directory: str) -> str | None:
     return await asyncio.to_thread(_find_video_file, directory)
+
+
+def _is_transient_lock_error(exc: BaseException) -> bool:
+    """True for OS-level "file in use" errors (Windows WinError 32/33, or the
+    POSIX equivalents) that are usually cleared within a few seconds — e.g. a
+    brief AV scan or Plex/thumbnail-generator handle on the file we're about
+    to move aside. Distinguishing these from permanent errors (permissions,
+    missing path) lets the caller retry a couple of times instead of failing
+    the whole replacement outright and re-downloading the same release again
+    on the next cycle only to hit the exact same transient lock.
+    """
+    winerror = getattr(exc, "winerror", None)
+    if winerror in (32, 33):
+        return True
+    return isinstance(exc, PermissionError)
+
+
+async def _move_with_retry(
+    source: str,
+    target: str,
+    config,
+    *,
+    purpose: str,
+    required_bytes: int | None = None,
+    attempts: int = 4,
+    delay_seconds: float = 5.0,
+):
+    """move_path(), retrying a few times on a transient file-lock error."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return await move_path(source, target, config, purpose=purpose, required_bytes=required_bytes)
+        except Exception as exc:
+            if attempt >= attempts or not _is_transient_lock_error(exc):
+                raise
+            logger.warning(
+                "{} attempt {}/{} hit a transient file lock on {!r}; retrying in {:.0f}s: {}",
+                purpose,
+                attempt,
+                attempts,
+                target,
+                delay_seconds,
+                exc,
+            )
+            await asyncio.sleep(delay_seconds)
 
 
 async def _verify_downloaded_file(video_file: str, config) -> str | None:
@@ -264,7 +308,9 @@ async def replace_file(download_id: int) -> bool:
 
         logger.info(f"Video file found: {video_file!r}")
 
-        if getattr(config.files, "verify_after_download", False):
+        # Fallback must match FilesConfig.verify_after_download's actual default
+        # (True) so a missing attribute never silently disables this safety check.
+        if getattr(config.files, "verify_after_download", True):
             verify_error = await _verify_downloaded_file(video_file, config)
             if verify_error:
                 logger.error(f"Download verification failed: {verify_error}")
@@ -366,7 +412,7 @@ async def replace_file(download_id: int) -> bool:
                         phase="recycle_original_started",
                         recycle_path=recycled_path,
                     )
-                    result = await move_path(
+                    result = await _move_with_retry(
                         mapped_path,
                         recycled_path,
                         config,
@@ -404,7 +450,7 @@ async def replace_file(download_id: int) -> bool:
                     phase="backup_existing_target_started",
                     fallback_backup_path=fallback_backup_path,
                 )
-                await move_path(
+                await _move_with_retry(
                     target_path,
                     fallback_backup_path,
                     config,
@@ -575,12 +621,25 @@ async def replace_file(download_id: int) -> bool:
         # Re-probe the file now sitting at target_path so the movie record reflects
         # what was actually placed, not the stats of the file it replaced. Without
         # this, resolution/codec/bitrate stay stuck at the previous file's values
-        # forever (the scanner skips re-probing once it sees "complete" metadata
-        # already on the row), which makes the replaced copy look perpetually like
-        # a low-quality/mismatched file and keeps triggering further replacements.
+        # forever (the scanner prefers Plex's own reported media info, which often
+        # doesn't get re-analyzed by a plain library refresh for a path Plex
+        # already knows), which makes the replaced copy look perpetually like a
+        # low-quality/mismatched file and keeps triggering further replacements.
+        #
+        # This runs unconditionally (not gated on files.enable_media_probe, which
+        # only controls the scanner's library-wide probing) because it's a single
+        # probe of the one file we just finished writing, not a bulk library scan.
+        # It still respects the NAS-path skip so we don't add extra SMB/NFS reads
+        # for a target library path that lives on a slow/sleeping NAS.
         new_probe: dict = {}
-        if getattr(config.files, "enable_media_probe", False):
+        nas_prefixes = list(getattr(config.files, "nas_path_prefixes", None) or [])
+        nas_probe_allowed = bool(getattr(config.files, "nas_probe_enabled", False))
+        target_norm = target_path.replace("\\", "/")
+        is_target_nas = target_norm.startswith("//") or path_matches_prefix(target_path, nas_prefixes)
+        if not is_target_nas or nas_probe_allowed:
             new_probe = await asyncio.to_thread(probe_media_file, target_path)
+        else:
+            logger.debug("Skipping post-replacement media probe for network path: {}", target_path)
 
         if fallback_backup_path and await _exists(fallback_backup_path):
             try:

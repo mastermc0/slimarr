@@ -59,6 +59,7 @@ async def get_savings_history(days: int = 30, user=Depends(get_current_user)):
     from datetime import datetime, timedelta, timezone
     from sqlalchemy import and_
 
+    days = max(1, min(days, 3650))
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     async with async_session() as db:
         result = await db.execute(
@@ -90,6 +91,7 @@ async def get_savings_history(days: int = 30, user=Depends(get_current_user)):
 
 @router.get("/recent-activity", response_model=list[RecentActivityItem])
 async def get_recent_activity(limit: int = 20, user=Depends(get_current_user)):
+    limit = max(1, min(limit, 200))
     async with async_session() as db:
         result = await db.execute(
             select(ActivityLog)

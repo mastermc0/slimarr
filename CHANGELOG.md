@@ -4,6 +4,41 @@ All notable changes to Slimarr are documented here.
 
 ---
 
+## [1.8.0.0] - 2026-07-12
+
+Standalone release summary: `docs/CHANGELOG_v1.8.0.0.md`
+
+Follow-up to 1.7.1.0 after reports that the replace-loop fix wasn't holding
+for everyone. Root-caused two separate reasons it kept recurring, then did a
+broader backend optimization/observability pass and a frontend UI-consistency
+pass across most pages.
+
+- Fixed the actual reason the 1.7.1.0 replace-loop fix didn't help everyone:
+  `replace_file()`'s post-replacement probe was gated behind
+  `files.enable_media_probe`, which defaults to off. It now always probes
+  the single file it just placed, and the scanner no longer lets a possibly
+  stale Plex read overwrite the corrected values on the next pass.
+- Fixed a second, independently-discovered cause of the same symptom found
+  in a user's live logs: a movie whose existing file was transiently locked
+  by another process failed to replace every night, re-downloading the same
+  release each time. The recycle-bin move and fallback backup-move now
+  retry a few times before giving up.
+- Performance: the Plex scan no longer blocks the event loop for its full
+  duration; the retry ladder's blacklist check and the orphan scanner's
+  history-item checks are now batched into single queries instead of one
+  per candidate/item; the NAS-pressure panel counts in SQL instead of
+  pulling every reject reason into Python.
+- Observability: several silently-swallowed errors (Radarr rescan/unmonitor,
+  uploader-health lookup) now log with context; a dead download client no
+  longer floods the log with an identical warning every 5 seconds; a
+  permanently-404ing TMDB lookup no longer retries every single scan.
+- Frontend: fixed a sidebar nav bug that double-highlighted parent/child
+  routes, a login-page bug that permanently locked the form behind a
+  transient startup connectivity error, and unified inconsistent
+  status-color palettes and loading/empty states across most pages.
+  Deduplicated ~200 lines of copy-pasted NAS-preset logic between Dashboard
+  and System into a shared hook, and memoized several list components.
+
 ## [1.7.1.0] - 2026-07-04
 
 Standalone release summary: `docs/CHANGELOG_v1.7.1.0.md`

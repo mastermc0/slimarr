@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { useToast } from '@/components/Toast'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import { SkeletonCard } from '@/components/Skeleton'
 import type { Movie, SearchResultItem } from '@/lib/types'
 import QualityBadge from '@/components/QualityBadge'
 import { ArrowLeft, Search, Zap, Download, Info, X, Lock, Unlock, Star, SlidersHorizontal, Save } from 'lucide-react'
@@ -108,13 +109,15 @@ export default function MovieDetail() {
         ),
       )
     } catch {
-      // keep existing state and let page continue rendering
+      toast('Failed to load movie details', 'error')
     }
   }
 
   useEffect(() => {
     void loadMovie()
-    api.searchResults(movieId).then(setResults).catch(() => {})
+    api.searchResults(movieId).then(setResults).catch(() => {
+      toast('Failed to load search results', 'error')
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [movieId])
 
@@ -282,7 +285,14 @@ export default function MovieDetail() {
     }
   }
 
-  if (!movie) return <div className="text-gray-400">Loading...</div>
+  if (!movie) {
+    return (
+      <div className="space-y-6">
+        <SkeletonCard lines={4} />
+        <SkeletonCard lines={6} />
+      </div>
+    )
+  }
 
   const posterUrl = movie.poster_path ? `/api/v1/images/${movie.id}/poster` : null
   const accepted = results.filter((r) => r.decision === 'accept')

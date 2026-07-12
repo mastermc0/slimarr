@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { useToast } from '@/components/Toast'
 import TestConnectionButton from '@/components/TestConnectionButton'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import { SkeletonCard } from '@/components/Skeleton'
 import { CheckCircle, Info, Plus, Trash2, XCircle } from 'lucide-react'
 
 interface Indexer {
@@ -55,7 +56,7 @@ export default function Settings() {
   const read = (path: string[]) =>
     path.reduce((o: unknown, k) => (o as Record<string, unknown>)?.[k], settings)
 
-  const validateSettings = () => {
+  const validation = useMemo(() => {
     if (!settings) return { errors: [] as string[], warnings: [] as string[] }
 
     const errors: string[] = []
@@ -120,7 +121,7 @@ export default function Settings() {
     }
 
     return { errors, warnings }
-  }
+  }, [settings])
 
   const formatBytes = (bytes: number) => {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
@@ -182,7 +183,6 @@ export default function Settings() {
 
   const save = async () => {
     if (!settings) return
-    const validation = validateSettings()
     if (validation.errors.length > 0) {
       toast('Fix settings validation errors before saving', 'error')
       return
@@ -209,10 +209,17 @@ export default function Settings() {
     })
   }
 
-  if (!settings) return <div className="text-gray-400">Loading settings…</div>
+  if (!settings) {
+    return (
+      <div className="space-y-4">
+        <SkeletonCard lines={4} />
+        <SkeletonCard lines={5} />
+        <SkeletonCard lines={3} />
+      </div>
+    )
+  }
 
   const downloadClient = ((settings as DownloadClientConfig).download_client ?? 'sabnzbd')
-  const validation = validateSettings()
   const capabilityLabels: Record<string, string> = {
     submit_url: 'Submit URL',
     queue_status: 'Queue status',

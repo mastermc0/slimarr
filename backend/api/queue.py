@@ -25,6 +25,7 @@ async def get_active_downloads(user=Depends(get_current_user)):
 
 @router.get("/recent", response_model=list[DownloadOut])
 async def get_recent_downloads(limit: int = 20, user=Depends(get_current_user)):
+    limit = max(1, min(limit, 200))
     async with async_session() as db:
         result = await db.execute(
             select(Download)
@@ -38,6 +39,7 @@ async def get_recent_downloads(limit: int = 20, user=Depends(get_current_user)):
 @router.get("/failed", response_model=list[DownloadOut])
 async def get_failed_downloads(limit: int = 50, user=Depends(get_current_user)):
     """List all failed downloads with cleanup status."""
+    limit = max(1, min(limit, 200))
     async with async_session() as db:
         result = await db.execute(
             select(Download)
@@ -100,7 +102,8 @@ async def retry_failed_download_endpoint(
 async def get_orphaned_downloads(limit: int = 100, user=Depends(get_current_user)):
     """Get list of orphaned downloads not in Slimarr DB."""
     from backend.core.orphan_scanner import get_orphaned_downloads
-    
+
+    limit = max(1, min(limit, 500))
     orphans = await get_orphaned_downloads(limit=limit)
     return orphans
 

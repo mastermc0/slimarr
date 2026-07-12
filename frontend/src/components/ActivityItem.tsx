@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import type { ActivityEntry } from '@/lib/types'
 
 interface Props {
@@ -18,7 +19,7 @@ function formatBytes(bytes?: number): string {
   return gb >= 1 ? `${gb.toFixed(2)} GB` : `${(bytes / 1e6).toFixed(0)} MB`
 }
 
-export default function ActivityItem({ entry }: Props) {
+function ActivityItem({ entry }: Props) {
   return (
     <div className="flex items-start gap-4 py-3 border-b border-gray-800">
       <div className="flex-1 min-w-0">
@@ -37,3 +38,5 @@ export default function ActivityItem({ entry }: Props) {
     </div>
   )
 }
+
+export default memo(ActivityItem)

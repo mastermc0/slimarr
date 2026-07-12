@@ -2142,17 +2142,21 @@ async def nas_pressure(user=Depends(get_current_user)):
             movie_rollup[title]["count"] = int(movie_rollup[title]["count"]) + 1
             movie_rollup[title]["written_bytes"] = int(movie_rollup[title]["written_bytes"]) + int(row.new_size or 0)
 
-        reject_reasons = (
+        # Only the count of NAS-floor rejections is needed here, so filter and
+        # count in SQL instead of pulling every reject_reason string in the
+        # window into Python — with a large decision_audit_log table (one row
+        # per candidate evaluated, potentially thousands per night) fetching
+        # and iterating the full text of every reject in the last 24h was
+        # taking several seconds on an endpoint polled every 60s.
+        nas_rejects_24h = (
             await db.execute(
-                select(DecisionAuditLog.reject_reason)
-                .where(
+                select(func.count()).select_from(DecisionAuditLog).where(
                     DecisionAuditLog.decision == "reject",
                     DecisionAuditLog.created_at >= since,
+                    DecisionAuditLog.reject_reason.like("%NAS minimum%"),
                 )
             )
-        ).scalars().all()
-
-    nas_rejects_24h = sum(1 for reason in reject_reasons if "NAS minimum" in str(reason or ""))
+        ).scalar_one()
 
     top_movies = sorted(
         movie_rollup.values(),

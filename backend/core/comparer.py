@@ -7,6 +7,8 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from loguru import logger
+
 from backend.config import get_config
 from backend.database import get_db_backend
 from backend.core.media_health import score_local_media_health, score_release_health
@@ -35,7 +37,29 @@ class ComparisonResult:
     media_health_reasons: list[str] | None = None
 
 
+_uploader_health_conn: sqlite3.Connection | None = None
+_uploader_health_conn_path: str | None = None
+_uploader_health_warned = False
+
+
+def _get_uploader_health_conn(db_path: str) -> sqlite3.Connection:
+    """Reuse a single connection across calls instead of opening/closing a raw
+    sqlite file handle for every candidate release in a search (this function
+    runs synchronously on the event loop thread, once per candidate — dozens
+    to 100+ times per movie search — so per-call connect overhead adds up).
+    """
+    global _uploader_health_conn, _uploader_health_conn_path
+    if _uploader_health_conn is None or _uploader_health_conn_path != db_path:
+        if _uploader_health_conn is not None:
+            _uploader_health_conn.close()
+        _uploader_health_conn = sqlite3.connect(db_path, check_same_thread=False)
+        _uploader_health_conn_path = db_path
+    return _uploader_health_conn
+
+
 def _uploader_health_score(uploader: Optional[str]) -> float:
+    global _uploader_health_warned
+
     if not uploader:
         return 0.5
 
@@ -47,17 +71,20 @@ def _uploader_health_score(uploader: Optional[str]) -> float:
         return 0.5
 
     try:
-        with sqlite3.connect(db_path) as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT health_score FROM uploader_stats WHERE uploader = ?", (uploader,))
-            row = cur.fetchone()
+        conn = _get_uploader_health_conn(db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT health_score FROM uploader_stats WHERE uploader = ?", (uploader,))
+        row = cur.fetchone()
 
         if not row or row[0] is None:
             return 0.5
 
         score = float(row[0])
         return max(0.0, min(1.0, score))
-    except Exception:
+    except Exception as e:
+        if not _uploader_health_warned:
+            logger.warning("Uploader health lookup failed (will keep using default 0.5): {}", e)
+            _uploader_health_warned = True
         return 0.5
 
 
