@@ -118,6 +118,27 @@ main {
   gap: 0.8rem;
 }
 
+.pill-row {
+  margin: 1.8rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.pill-row li {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.4rem 0.85rem;
+}
+
 .btn {
   text-decoration: none;
   padding: 0.8rem 1.15rem;
@@ -220,6 +241,21 @@ main {
   color: var(--muted);
   line-height: 1.45;
   font-size: 0.92rem;
+}
+
+.release-note {
+  margin: 1rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.release-note a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.release-note a:hover {
+  text-decoration: underline;
 }
 
 .section-head {
@@ -357,6 +393,19 @@ main {
   margin: 0;
   color: #95b8c7;
   font-size: 0.85rem;
+}
+
+.footer-version {
+  margin-top: 0.4rem !important;
+}
+
+.footer-version a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.footer-version a:hover {
+  text-decoration: underline;
 }
 
 .reveal {
