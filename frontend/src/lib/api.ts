@@ -66,6 +66,8 @@ export const api = {
     client.post(`/library/movies/${id}/lock`).then((r) => r.data),
   unlockMovie: (id: number) =>
     client.post(`/library/movies/${id}/unlock`).then((r) => r.data),
+  removeMovie: (id: number) =>
+    client.delete(`/library/movies/${id}`).then((r) => r.data),
 
   // Activity
   activity: (params?: Record<string, unknown>) =>

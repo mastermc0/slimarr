@@ -14,6 +14,11 @@ class ActionStatusResponse(BaseModel):
     search_result_id: int | None = None
 
 
+class MovieRemoveResponse(BaseModel):
+    success: bool
+    message: str
+
+
 class SearchTestRequest(BaseModel):
     title: str
     year: int | None = None

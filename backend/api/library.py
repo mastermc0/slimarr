@@ -4,18 +4,19 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, BackgroundTasks, Depends
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 
 from backend.api.models import (
     ActionStatusResponse,
     MovieListResponse,
     MovieOut,
     MovieQualityIntentUpdateRequest,
+    MovieRemoveResponse,
     SearchResultOut,
 )
 from backend.auth.dependencies import get_current_user
-from backend.database import Movie, SearchResult, async_session
-from backend.utils.responses import not_found, get_correlation_id
+from backend.database import Download, Movie, SearchResult, async_session
+from backend.utils.responses import not_found, get_correlation_id, service_unavailable, validation_error
 
 router = APIRouter(prefix="/library", tags=["library"])
 
@@ -77,6 +78,56 @@ async def get_movie(movie_id: int, user=Depends(get_current_user)):
     if not movie:
         raise not_found("Movie", correlation_id=get_correlation_id())
     return _movie_dict(movie)
+
+
+@router.delete("/movies/{movie_id}", response_model=MovieRemoveResponse)
+async def remove_movie(movie_id: int, user=Depends(get_current_user)):
+    """Stop tracking a movie in Slimarr.
+
+    Only allowed once Plex no longer reports this movie's plex_rating_key,
+    so this can never untrack something that's still a real, current
+    library item. This exists specifically to clean up duplicate/ghost
+    entries — Plex can assign a *new* rating key to what's physically the
+    same file after repeated in-place replacements (especially when the
+    file extension changes between candidates), leaving old entries behind
+    that Plex no longer serves but Slimarr never stops tracking on its own.
+    """
+    from backend.config import get_config
+
+    async with async_session() as db:
+        result = await db.execute(select(Movie).where(Movie.id == movie_id))
+        movie = result.scalar_one_or_none()
+        if not movie:
+            raise not_found("Movie", correlation_id=get_correlation_id())
+
+        config = get_config()
+        if config.plex.url and config.plex.token:
+            import asyncio
+
+            from backend.integrations.plex import PlexClient
+
+            try:
+                plex = PlexClient()
+                current_keys = {
+                    m["plex_rating_key"] for m in await asyncio.to_thread(plex.get_all_movies)
+                }
+            except Exception:
+                raise service_unavailable("Plex", correlation_id=get_correlation_id())
+
+            if movie.plex_rating_key in current_keys:
+                raise validation_error(
+                    "This movie still exists in Plex, so it can't be removed from "
+                    "tracking — delete/merge it in Plex first, then re-scan.",
+                    correlation_id=get_correlation_id(),
+                )
+
+        title = movie.title
+        await db.execute(delete(SearchResult).where(SearchResult.movie_id == movie_id))
+        await db.execute(delete(Download).where(Download.movie_id == movie_id))
+        await db.delete(movie)
+        await db.commit()
+
+    return {"success": True, "message": f"Stopped tracking '{title}'"}
 
 
 @router.get("/movies/{movie_id}/search-results", response_model=list[SearchResultOut])

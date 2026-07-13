@@ -6,7 +6,7 @@ import ConfirmDialog from '@/components/ConfirmDialog'
 import { SkeletonCard } from '@/components/Skeleton'
 import type { Movie, SearchResultItem } from '@/lib/types'
 import QualityBadge from '@/components/QualityBadge'
-import { ArrowLeft, Search, Zap, Download, Info, X, Lock, Unlock, Star, SlidersHorizontal, Save } from 'lucide-react'
+import { ArrowLeft, Search, Zap, Download, Info, X, Lock, Unlock, Star, SlidersHorizontal, Save, Trash2 } from 'lucide-react'
 
 const qualityPriorityOptions = [
   { key: '4k', label: '4K' },
@@ -64,6 +64,8 @@ export default function MovieDetail() {
   const [downloadingId, setDownloadingId] = useState<number | null>(null)
   const [selectedResult, setSelectedResult] = useState<SearchResultItem | null>(null)
   const [locking, setLocking] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const [confirmRemove, setConfirmRemove] = useState(false)
   const [preferringId, setPreferringId] = useState<number | null>(null)
   const [clearingPreferred, setClearingPreferred] = useState(false)
   const [savingQuality, setSavingQuality] = useState(false)
@@ -214,6 +216,21 @@ export default function MovieDetail() {
       toast('Failed to update lock', 'error')
     } finally {
       setLocking(false)
+    }
+  }
+
+  const doRemoveMovie = async () => {
+    setRemoving(true)
+    try {
+      const result = await api.removeMovie(movieId) as { success: boolean; message: string }
+      toast(result.message || 'Removed from tracking', 'success')
+      navigate(fromLibrary)
+    } catch (err: unknown) {
+      const e2 = err as { response?: { data?: { detail?: string } } }
+      toast(e2.response?.data?.detail || 'Failed to remove movie', 'error')
+    } finally {
+      setRemoving(false)
+      setConfirmRemove(false)
     }
   }
 
@@ -394,6 +411,14 @@ export default function MovieDetail() {
                 <Star size={16} /> {clearingPreferred ? 'Clearing...' : 'Clear Preferred'}
               </button>
             )}
+            <button
+              onClick={() => setConfirmRemove(true)}
+              disabled={removing}
+              title="Stop tracking this movie in Slimarr — only works once it no longer exists in Plex. Use this to clean up duplicate/ghost library entries."
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-rose-900/60 hover:bg-rose-700 text-rose-300 hover:text-white text-sm disabled:opacity-50 ml-auto"
+            >
+              <Trash2 size={16} /> {removing ? 'Removing...' : 'Remove from Library'}
+            </button>
           </div>
         </div>
       </div>
@@ -753,6 +778,17 @@ export default function MovieDetail() {
         destructive
         onConfirm={() => { if (forceDownloadResultId !== null) void _executeDownload(forceDownloadResultId, true) }}
         onCancel={() => setForceDownloadResultId(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmRemove}
+        title="Remove From Library?"
+        message="Stops Slimarr from tracking this movie — its search/download history is deleted too. This only works if Plex no longer reports this title (e.g. a duplicate/ghost entry left over from a past replacement). It will not touch the file itself or anything still in Plex."
+        confirmLabel={removing ? 'Removing…' : 'Remove'}
+        destructive
+        loading={removing}
+        onConfirm={doRemoveMovie}
+        onCancel={() => setConfirmRemove(false)}
       />
     </div>
   )
