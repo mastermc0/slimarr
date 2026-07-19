@@ -16,7 +16,7 @@
         <img src="images/header-logo.PNG" alt="Slimarr" />
       </a>
       <nav class="nav-links">
-        <a href="#v1800">v1.8.0.0</a>
+        <a href="#v1900">v1.9.0.0</a>
         <a href="#install">Install</a>
         <a href="#features">Features</a>
         <a href="#screenshots">Screenshots</a>
@@ -46,30 +46,30 @@
         </ul>
       </section>
 
-      <section id="v1800" class="panel release-panel reveal">
+      <section id="v1900" class="panel release-panel reveal">
         <div class="section-head">
-          <h2>What Is New In v1.8.0.0</h2>
-          <p>A backend optimization, observability, and frontend polish pass — plus two independently-discovered fixes for the movie replace-loop bug.</p>
+          <h2>What Is New In v1.9.0.0</h2>
+          <p>A full codebase review pass, then a second pass fixing what it found — a config feature that silently did nothing, a database reliability bug, and a navigation rework.</p>
         </div>
         <div class="release-grid">
           <article>
-            <h3>Replace-Loop, Fully Fixed</h3>
-            <p>Root-caused two separate reasons a movie could get endlessly re-downloaded: a config default that silently disabled the previous fix for most users, and a transient file lock that now gets retried instead of failing the whole replacement.</p>
+            <h3>Exclusions, Actually Working</h3>
+            <p>The exclusions: config section was fully defined and validated but never read anywhere — personal footage sharing a library with movies was being sent to Usenet indexers every cycle. It's now enforced before a search is ever issued, with a Settings UI to configure it.</p>
           </article>
           <article>
-            <h3>Faster, Quieter Backend</h3>
-            <p>The library scan no longer blocks the app while it runs, several hot paths went from one database query per item to a single batched query, and noisy or silently-swallowed errors now log with useful context.</p>
+            <h3>Database Reliability</h3>
+            <p>SQLite's default journal mode could throw "database is locked" under concurrent writes. WAL mode plus a busy-timeout are now set on every connection, and uploader-health scoring no longer blocks the event loop or silently breaks on PostgreSQL.</p>
           </article>
           <article>
-            <h3>Premium UI Consistency</h3>
-            <p>Unified status colors, loading states, and empty states across most pages, fixed a sidebar navigation bug, and deduplicated repeated logic behind a shared hook.</p>
+            <h3>Sharper Upgrade Decisions</h3>
+            <p>A local file's source type — read by the comparer's upgrade checks but never actually written — is now populated from the release title on replacement and guessed from the filename on scan.</p>
           </article>
           <article>
-            <h3>Verified Against Real Logs</h3>
-            <p>Every fix in this release was traced back to and confirmed against weeks of a real user's production logs — not just synthetic tests.</p>
+            <h3>Grouped Navigation</h3>
+            <p>The sidebar's flat list of links is now grouped into Library, Activity, System, and Settings sections, with live badge counts for failed and orphaned downloads.</p>
           </article>
         </div>
-        <p class="release-note">Full details: <a href="https://github.com/theantipopau/slimarr/blob/main/docs/CHANGELOG_v1.8.0.0.md" target="_blank" rel="noopener noreferrer">CHANGELOG_v1.8.0.0.md</a></p>
+        <p class="release-note">Full details: <a href="https://github.com/theantipopau/slimarr/blob/main/docs/CHANGELOG_v1.9.0.0.md" target="_blank" rel="noopener noreferrer">CHANGELOG_v1.9.0.0.md</a></p>
       </section>
 
       <section id="install" class="panel install-panel reveal">
@@ -86,7 +86,7 @@ docker compose up -d</code></pre>
           </article>
           <article>
             <h3>Windows</h3>
-            <p>Download the latest <strong>SlimarrSetup-1.8.0.0.exe</strong> from GitHub Releases. The installer bundles Python and dependencies, starts the tray app, then opens Slimarr at <strong>localhost:9494</strong>.</p>
+            <p>Download the latest <strong>SlimarrSetup-1.9.0.0.exe</strong> from GitHub Releases. The installer bundles Python and dependencies, starts the tray app, then opens Slimarr at <strong>localhost:9494</strong>.</p>
           </article>
         </div>
       </section>
@@ -153,7 +153,7 @@ docker compose up -d</code></pre>
         <h2>Ready To Ship A Leaner Library?</h2>
         <p>Install Slimarr, point it at Plex and your download stack, and let nightly automation keep your movie storage under control.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="https://github.com/theantipopau/slimarr/releases" target="_blank" rel="noopener noreferrer">Get Slimarr 1.8.0.0</a>
+          <a class="btn btn-primary" href="https://github.com/theantipopau/slimarr/releases" target="_blank" rel="noopener noreferrer">Get Slimarr 1.9.0.0</a>
           <a class="btn btn-ghost" href="https://github.com/theantipopau/slimarr/blob/main/README.md" target="_blank" rel="noopener noreferrer">Read Setup Guide</a>
         </div>
       </section>
@@ -161,7 +161,7 @@ docker compose up -d</code></pre>
 
     <footer class="site-footer">
       <p>Slimarr is an independent open-source project and is not affiliated with Sonarr, Radarr, SABnzbd, or Plex.</p>
-      <p class="footer-version">Current release: v1.8.0.0 &middot; <a href="https://github.com/theantipopau/slimarr/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer">Full changelog</a></p>
+      <p class="footer-version">Current release: v1.9.0.0 &middot; <a href="https://github.com/theantipopau/slimarr/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer">Full changelog</a></p>
     </footer>
   </body>
 </html>
