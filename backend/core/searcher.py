@@ -12,6 +12,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from backend.core.comparer import compare_release
+from backend.core.downloader import get_uploader_health_scores
 from backend.core.search_diagnostics import (
     emit_search_warning,
     is_rate_limit_signal,
@@ -121,6 +122,7 @@ async def search_for_movie(movie_id: int) -> list[dict]:
             await emit_search_warning(
                 "Search cannot run because no search providers are configured.",
                 {"movie_id": movie.id, "title": movie.title},
+                code="search_not_configured",
             )
 
         for idx in config.indexers:
@@ -136,6 +138,7 @@ async def search_for_movie(movie_id: int) -> list[dict]:
                     await emit_search_warning(
                         "A direct indexer is configured without Newznab movie categories.",
                         {"indexer": idx.name, "categories": idx.categories},
+                        code="indexer_category_mismatch",
                     )
 
         # Prowlarr path
@@ -188,6 +191,7 @@ async def search_for_movie(movie_id: int) -> list[dict]:
                             await emit_search_warning(
                                 "Indexer API quota or rate limit reached; pausing this indexer temporarily.",
                                 {"indexer": idx_cfg.name, "paused_until": until.isoformat()},
+                                code="rate_limited",
                             )
                         raise detail.get("exception") or RuntimeError(str(detail.get("error")))
                     return detail.get("parsed_results") or [], False
@@ -240,26 +244,38 @@ async def search_for_movie(movie_id: int) -> list[dict]:
         for old_sr in old.scalars().all():
             await db.delete(old_sr)
 
+        # Parse every candidate up front so uploader health can be fetched in a
+        # single batched query instead of one blocking sqlite3 lookup per
+        # candidate inside compare_release() (a movie search can have 100+
+        # candidates).
+        candidates: list[tuple[dict, str, int, object]] = []
+        for r in unique_raw:
+            release_title = str(r.get("release_title") or "").strip()
+            if not release_title:
+                logger.warning("Skipping malformed search result for {}: missing release title", movie.title)
+                continue
+
+            candidate_size = int(r.get("size") or 0)
+            if candidate_size <= 0:
+                logger.warning(
+                    "Skipping malformed search result for {}: invalid size for '{}'",
+                    movie.title,
+                    release_title,
+                )
+                continue
+
+            candidates.append((r, release_title, candidate_size, parse_release_title(release_title)))
+
+        uploader_health_scores = await get_uploader_health_scores(
+            [parsed.uploader or parsed.group or "" for _, _, _, parsed in candidates]
+        )
+
         stored = []
         audit_logs = []
-        for r in unique_raw:
+        for r, release_title, candidate_size, parsed in candidates:
             try:
-                release_title = str(r.get("release_title") or "").strip()
-                if not release_title:
-                    logger.warning("Skipping malformed search result for {}: missing release title", movie.title)
-                    continue
-
-                candidate_size = int(r.get("size") or 0)
-                if candidate_size <= 0:
-                    logger.warning(
-                        "Skipping malformed search result for {}: invalid size for '{}'",
-                        movie.title,
-                        release_title,
-                    )
-                    continue
-
-                parsed = parse_release_title(release_title)
                 age_days = r.get("age_days") if r.get("age_days") is not None else _nzb_age_days(r.get("pub_date"))
+                uploader_key = parsed.uploader or parsed.group or ""
                 cmp = compare_release(
                     local_size=movie.file_size or 0,
                     local_resolution=movie.resolution or "",
@@ -276,6 +292,7 @@ async def search_for_movie(movie_id: int) -> list[dict]:
                     allow_larger_replacements=bool(movie.allow_larger_replacements),
                     quality_profile_overrides=quality_profile_overrides,
                     local_file_path=movie.file_path or "",
+                    uploader_health_score=uploader_health_scores.get(uploader_key, 0.5),
                 )
 
                 sr = SearchResult(

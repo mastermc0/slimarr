@@ -19,8 +19,8 @@ export default function Layout() {
   }, [mobileNavOpen])
 
   useSocket('search:warning', (payload) => {
-    const warning = payload as { message?: string; detail?: { indexer?: string; provider?: string } }
-    if (warning.message !== 'Indexer API quota or rate limit reached.') return
+    const warning = payload as { code?: string; detail?: { indexer?: string; provider?: string } }
+    if (warning.code !== 'rate_limited') return
 
     const source = warning.detail?.indexer || warning.detail?.provider || 'Indexer'
     toast(`${source} API quota or rate limit reached. Check Search Diagnostics.`, 'error')

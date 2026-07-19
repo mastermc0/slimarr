@@ -3,6 +3,7 @@ import { api } from '@/lib/api'
 import { useToast } from '@/components/Toast'
 import { Tv2, Eye, Trash2, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import { formatBytes } from '@/lib/format'
 
 interface TVShow {
   plex_rating_key: string
@@ -23,10 +24,7 @@ interface ShowsResponse {
 }
 
 function fmtSize(bytes: number): string {
-  if (bytes >= 1e12) return (bytes / 1e12).toFixed(2) + ' TB'
-  if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB'
-  if (bytes >= 1e6) return (bytes / 1e6).toFixed(0) + ' MB'
-  return bytes + ' B'
+  return formatBytes(bytes, bytes >= 1024 ** 4 ? 2 : 1)
 }
 
 function fmtDate(iso: string | null): string {

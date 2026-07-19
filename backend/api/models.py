@@ -163,6 +163,12 @@ class OrphanCleanupResponse(BaseModel):
     orphan_id: int
 
 
+class QueueSummaryResponse(BaseModel):
+    active: int
+    failed: int
+    orphaned: int
+
+
 class DashboardStatsResponse(BaseModel):
     total_movies: int
     improved: int

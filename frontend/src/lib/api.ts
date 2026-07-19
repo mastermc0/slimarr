@@ -74,6 +74,7 @@ export const api = {
     client.get('/activity', { params }).then((r) => r.data),
 
   // Queue
+  queueSummary: () => client.get('/queue/summary').then((r) => r.data),
   activeDownloads: () => client.get('/queue/active').then((r) => r.data),
   recentDownloads: (limit = 20) =>
     client.get(`/queue/recent?limit=${limit}`).then((r) => r.data),

@@ -23,14 +23,7 @@ import type { PersistentJob, StorageOperationItem, StorageOperationsSnapshot } f
 import EmptyState from '@/components/EmptyState'
 import { SkeletonTable } from '@/components/Skeleton'
 import ConfirmDialog from '@/components/ConfirmDialog'
-
-function fmtBytes(b: number): string {
-  if (!b) return '0 B'
-  if (b < 1024) return `${b} B`
-  if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`
-  if (b < 1073741824) return `${(b / 1048576).toFixed(1)} MB`
-  return `${(b / 1073741824).toFixed(2)} GB`
-}
+import { formatBytes as fmtBytes } from '@/lib/format'
 
 function fmtDuration(ms: number | null | undefined): string {
   if (!ms) return '-'

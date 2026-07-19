@@ -44,9 +44,7 @@ _uploader_health_warned = False
 
 def _get_uploader_health_conn(db_path: str) -> sqlite3.Connection:
     """Reuse a single connection across calls instead of opening/closing a raw
-    sqlite file handle for every candidate release in a search (this function
-    runs synchronously on the event loop thread, once per candidate — dozens
-    to 100+ times per movie search — so per-call connect overhead adds up).
+    sqlite file handle on every call.
     """
     global _uploader_health_conn, _uploader_health_conn_path
     if _uploader_health_conn is None or _uploader_health_conn_path != db_path:
@@ -58,6 +56,13 @@ def _get_uploader_health_conn(db_path: str) -> sqlite3.Connection:
 
 
 def _uploader_health_score(uploader: Optional[str]) -> float:
+    """Synchronous, sqlite-only fallback for callers that don't pass
+    `uploader_health_score` to compare_release() — e.g. tests or one-off
+    calls outside the searcher's batch path. The searcher itself pre-fetches
+    scores via downloader.get_uploader_health_scores() (one async query for
+    the whole candidate list, works on any DB backend) specifically to avoid
+    calling this once per candidate on the event loop thread.
+    """
     global _uploader_health_warned
 
     if not uploader:
@@ -322,10 +327,21 @@ def compare_release(
     allow_larger_replacements: bool = False,
     quality_profile_overrides: dict[str, Any] | None = None,
     local_file_path: str = "",
+    uploader_health_score: float | None = None,
 ) -> ComparisonResult:
     config = get_config()
     parsed = parse_release_title(candidate_title)
-    uploader_health = _uploader_health_score(parsed.uploader or parsed.group)
+    # Callers processing a batch of candidates (the searcher's per-movie loop)
+    # should pre-fetch scores with downloader.get_uploader_health_scores() and
+    # pass the result here — it's one async query for the whole batch instead
+    # of a blocking sqlite3 call per candidate, and it works on PostgreSQL.
+    # Falling back to the synchronous per-call lookup keeps this function
+    # usable standalone (tests, one-off calls) without requiring callers to
+    # thread a score through.
+    if uploader_health_score is not None:
+        uploader_health = uploader_health_score
+    else:
+        uploader_health = _uploader_health_score(parsed.uploader or parsed.group)
     reliability = indexer_reliability if indexer_reliability is not None else uploader_health
     candidate_health = score_release_health(candidate_title, candidate_size, uploader_health=reliability)
     local_health = score_local_media_health(
@@ -710,18 +726,3 @@ def compare_release(
         media_health_rating=candidate_health.rating,
         media_health_reasons=candidate_health.reasons,
     )
-
-
-def rank_candidates(
-    local_size: int,
-    local_resolution: str,
-    local_codec: str,
-    candidates: list[dict],
-) -> list[tuple[dict, ComparisonResult]]:
-    results = [
-        (c, compare_release(local_size, local_resolution, local_codec, c["size"], c["release_title"], c.get("age_days")))
-        for c in candidates
-    ]
-    accepted = [(c, r) for c, r in results if r.decision == "accept"]
-    accepted.sort(key=lambda x: x[1].score, reverse=True)
-    return accepted

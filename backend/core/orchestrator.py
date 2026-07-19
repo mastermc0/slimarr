@@ -10,6 +10,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from backend.core.download_workflow import process_search_result_download
+from backend.core.exclusions import is_movie_excluded
 from backend.core.schedule_window import is_within_schedule_window
 from backend.core.search_diagnostics import (
     SearchPipelineDegraded,
@@ -52,6 +53,8 @@ async def process_single_movie(movie_id: int) -> dict:
     force_keep = False
     slimarr_locked = False
     quality_intent = "space_saver"
+    excluded = False
+    excluded_reason: str | None = None
     async with async_session() as db:
         movie = await db.get(Movie, movie_id)
         if movie:
@@ -59,6 +62,15 @@ async def process_single_movie(movie_id: int) -> dict:
             force_keep = bool(movie.force_keep)
             slimarr_locked = bool(movie.slimarr_locked)
             quality_intent = movie.quality_intent or "space_saver"
+            excluded, excluded_reason = is_movie_excluded(movie, config)
+
+    if excluded:
+        logger.info(
+            "Skipping movie {}: excluded by exclusion rule ({})",
+            movie_id,
+            excluded_reason,
+        )
+        return {"movie_id": movie_id, "status": "excluded", "excluded_reason": excluded_reason}
 
     if force_keep or slimarr_locked or quality_intent in {"locked", "pinned"}:
         logger.info(
@@ -191,6 +203,7 @@ async def run_full_cycle() -> dict:
         "improved": 0,
         "failed": 0,
         "skipped": 0,
+        "excluded": 0,
         "no_candidates": 0,
         "review_required": 0,
         "stopped_reason": "",
@@ -220,7 +233,9 @@ async def run_full_cycle() -> dict:
             summary["failed"] = len(movies)
             message = "Cycle stopped: no enabled Prowlarr instance and no direct indexers are configured"
             logger.error(message)
-            await emit_search_warning(message, {"queued_movies": len(movies)})
+            await emit_search_warning(
+                message, {"queued_movies": len(movies)}, code="search_not_configured"
+            )
             return summary
 
         try:
@@ -232,6 +247,7 @@ async def run_full_cycle() -> dict:
             await emit_search_warning(
                 "Automation stopped because the search pipeline is degraded.",
                 {"reason": str(e), "queued_movies": len(movies)},
+                code="search_degraded",
             )
             return summary
 
@@ -269,6 +285,8 @@ async def run_full_cycle() -> dict:
                         await asyncio.sleep(throttle_seconds)
                 elif status == "no_candidates":
                     summary["no_candidates"] += 1
+                elif status == "excluded":
+                    summary["excluded"] += 1
                 elif status in {"protected", "skipped"}:
                     summary["skipped"] += 1
                 elif status == "review_required":
@@ -284,6 +302,7 @@ async def run_full_cycle() -> dict:
                 await emit_search_warning(
                     "Automation stopped because the search pipeline is degraded.",
                     {"reason": str(e), "processed": summary["processed"]},
+                    code="search_degraded",
                 )
                 break
             except Exception as e:

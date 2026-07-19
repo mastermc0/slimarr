@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import json
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 from sqlalchemy import select
 
-from backend.core.parser import normalize_codec, normalize_resolution
+from backend.core.parser import normalize_codec, normalize_resolution, parse_release_title
 from backend.core.media_probe import probe_media_file
 from backend.core.search_diagnostics import redact_text
 from backend.core.storage import path_matches_prefix
@@ -257,6 +258,14 @@ async def _run_scan() -> int:
                 movie.imdb_id = pm.get("imdb_id") or movie.imdb_id
                 movie.tmdb_id = tmdb_id_found or pm.get("tmdb_id") or movie.tmdb_id
                 movie.file_path = pm.get("file_path")
+                if pm.get("added_at"):
+                    try:
+                        parsed_added_at = datetime.fromisoformat(str(pm["added_at"]))
+                        if parsed_added_at.tzinfo is not None:
+                            parsed_added_at = parsed_added_at.astimezone(timezone.utc).replace(tzinfo=None)
+                        movie.added_at = parsed_added_at
+                    except ValueError:
+                        pass
                 new_file_size = pm.get("file_size") or 0
 
                 # Plex reports file size from a cheap filesystem stat, so it's
@@ -290,6 +299,18 @@ async def _run_scan() -> int:
                     movie.bitrate = existing_bitrate
                 else:
                     movie.bitrate = pm.get("bitrate") or probe.get("bitrate_kbps") or 0
+
+                # A completed replacement already sets source_type from the actual
+                # release title (more reliable than a filename guess) — only fill
+                # it in here for movies Slimarr has never replaced yet, and only
+                # when the filename itself carries a recognizable release tag
+                # (a plain Plex-renamed "Movie (2022).mkv" won't match, which is
+                # fine — it just leaves source_type unset rather than guessing).
+                if not movie.source_type and movie.file_path:
+                    filename_parsed = parse_release_title(os.path.basename(str(movie.file_path)))
+                    if filename_parsed.source:
+                        movie.source_type = filename_parsed.source
+
                 movie.last_scanned = datetime.now(timezone.utc)
 
                 if movie.original_file_size is None:

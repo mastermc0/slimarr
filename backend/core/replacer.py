@@ -13,7 +13,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from backend.core.media_probe import probe_media_file
-from backend.core.parser import normalize_codec, normalize_resolution
+from backend.core.parser import normalize_codec, normalize_resolution, parse_release_title
 from backend.core.storage import move_path, path_matches_prefix, preflight_storage_path, remove_path
 from backend.database import ActivityLog, Download, Movie, ReplacementRecoveryRecord, async_session
 from backend.realtime.events import emit_event
@@ -688,6 +688,13 @@ async def replace_file(download_id: int) -> bool:
             movie.audio_codec = new_probe["audio_codec"]
         if new_probe.get("bitrate_kbps"):
             movie.bitrate = new_probe["bitrate_kbps"]
+        # The release title is the most reliable source-type signal available —
+        # far more so than re-guessing from a Plex-renamed filename on the next
+        # scan — so capture it here while we know exactly which release this is.
+        if dl.release_title:
+            replaced_parsed = parse_release_title(dl.release_title)
+            if replaced_parsed.source:
+                movie.source_type = replaced_parsed.source
 
         # Update download record
         dl.status = "replaced"

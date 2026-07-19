@@ -5,11 +5,10 @@ import { useSocket } from '@/hooks/useSocket'
 import { SkeletonTable } from '@/components/Skeleton'
 import EmptyState from '@/components/EmptyState'
 import type { Download } from '@/lib/types'
+import { formatBytes } from '@/lib/format'
 
 function fmt(bytes?: number) {
-  if (!bytes) return '—'
-  const gb = bytes / 1e9
-  return gb >= 1 ? `${gb.toFixed(2)} GB` : `${(bytes / 1e6).toFixed(0)} MB`
+  return bytes ? formatBytes(bytes, 2) : '—'
 }
 
 function cleanupStatusColor(status?: string) {

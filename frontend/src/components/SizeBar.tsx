@@ -1,3 +1,4 @@
+import { formatGB } from '@/lib/format'
 
 interface Props {
   original?: number
@@ -17,7 +18,7 @@ export default function SizeBar({ original, current }: Props) {
   return (
     <div className="w-full">
       <div className="flex justify-between text-xs text-gray-400 mb-1">
-        <span>Size: {current ? (current / 1e9).toFixed(2) : '—'} GB</span>
+        <span>Size: {current ? formatGB(current, 2) : '—'}</span>
         {savings > 0 && (
           <span className="text-green-400">−{savingsPct}%</span>
         )}

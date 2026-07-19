@@ -3,14 +3,10 @@ import QualityBadge from './QualityBadge'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { memo, useEffect, useRef, useState } from 'react'
 import { CheckCircle, Loader } from 'lucide-react'
+import { formatGB } from '@/lib/format'
 
 interface Props {
   movie: Movie
-}
-
-function formatGB(bytes?: number): string {
-  if (!bytes) return '--'
-  return (bytes / 1_073_741_824).toFixed(1) + ' GB'
 }
 
 const statusBorder: Record<string, string> = {
@@ -102,7 +98,7 @@ function PosterCard({ movie }: Props) {
         <p className="text-xs font-semibold truncate">{movie.title}</p>
         <div className="flex items-center justify-between mt-0.5">
           <p className="text-xs text-gray-400">{movie.year}</p>
-          <p className="text-xs text-gray-500">{formatGB(movie.file_size)}</p>
+          <p className="text-xs text-gray-500">{movie.file_size ? formatGB(movie.file_size) : '--'}</p>
         </div>
         {(movie.resolution || movie.video_codec || movie.audio_codec) && (
           <div className="flex gap-1 mt-1 flex-wrap">

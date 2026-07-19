@@ -8,13 +8,10 @@ import { api } from '@/lib/api'
 import { useSocket } from '@/hooks/useSocket'
 import { useNasPresetManager } from '@/hooks/useNasPreset'
 import type { DashboardStats, ActivityEntry, IntegrationMatrix, NasPressure } from '@/lib/types'
+import { formatGB } from '@/lib/format'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer
 } from 'recharts'
-
-function formatGB(bytes: number): string {
-  return (bytes / 1e9).toFixed(1) + ' GB'
-}
 
 function formatDate(value?: string): string {
   if (!value) return 'Never'
@@ -313,13 +310,13 @@ export default function Dashboard() {
           <ResponsiveContainer width="100%" height={180}>
             <AreaChart data={history}>
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#9ca3af' }} tickFormatter={(v) => v.slice(0, 10)} />
-              <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickFormatter={(v) => `${(v / 1e9).toFixed(1)}G`} />
+              <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickFormatter={(v) => `${(v / 1024 ** 3).toFixed(1)}G`} />
               <Tooltip
                 contentStyle={{ background: '#111827', border: 'none' }}
-                formatter={(v: number) => [`${(v / 1e9).toFixed(2)} GB`, 'Total Reclaimed']}
+                formatter={(v: number) => [formatGB(v, 2), 'Total Reclaimed']}
                 labelFormatter={(l) => l.slice(0, 10)}
               />
-              <Area type="monotone" dataKey="cumulative_bytes" stroke="#4CAF50" fill="#4CAF5033" strokeWidth={2} />
+              <Area type="monotone" dataKey="cumulative_bytes" stroke="#1fbf8f" fill="#1fbf8f33" strokeWidth={2} />
             </AreaChart>
           </ResponsiveContainer>
         </div>

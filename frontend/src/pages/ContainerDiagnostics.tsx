@@ -3,6 +3,7 @@ import { api } from '@/lib/api'
 import { useToast } from '@/components/Toast'
 import { Skeleton } from '@/components/Skeleton'
 import { Server, HardDrive, Container, AlertTriangle, CheckCircle, XCircle, RefreshCw, Copy } from 'lucide-react'
+import { formatBytes } from '@/lib/format'
 
 interface DirCheck {
   label: string
@@ -54,11 +55,7 @@ interface StartupPayload {
 }
 
 function fmtBytes(b: number | null): string {
-  if (b == null) return 'unknown'
-  if (b < 1024) return `${b} B`
-  if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`
-  if (b < 1073741824) return `${(b / 1048576).toFixed(1)} MB`
-  return `${(b / 1073741824).toFixed(2)} GB`
+  return b == null ? 'unknown' : formatBytes(b, 1)
 }
 
 function StatusIcon({ ok, warn }: { ok: boolean; warn?: boolean }) {

@@ -8,6 +8,7 @@ import type { DecisionAuditEntry, DuplicateCleanupPreview, HealthMatrix, NasPres
 import { Play, Square, RefreshCw, Database, Clock, Server, CheckCircle, XCircle, Trash2, ArrowUpCircle, ShieldCheck, Sparkles, GaugeCircle, HardDrive, ShieldAlert, SlidersHorizontal } from 'lucide-react'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import StorageStateMark from '@/components/StorageStateMark'
+import { formatBytes as fmtBytes } from '@/lib/format'
 
 interface ServiceHealth {
   success: boolean
@@ -39,13 +40,6 @@ function fmtUptime(secs: number) {
   if (h > 0) return `${h}h ${m}m`
   if (m > 0) return `${m}m ${s}s`
   return `${s}s`
-}
-
-function fmtBytes(b: number) {
-  if (b < 1024) return `${b} B`
-  if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`
-  if (b < 1073741824) return `${(b / 1048576).toFixed(1)} MB`
-  return `${(b / 1073741824).toFixed(2)} GB`
 }
 
 function fmtPct(value: number) {
@@ -91,7 +85,10 @@ export default function System() {
     title: string
     message: string
     confirmLabel?: string
+    destructive?: boolean
+    children?: React.ReactNode
     onConfirm: () => void
+    onCancel?: () => void
   }>({ open: false, title: '', message: '', onConfirm: () => {} })
 
   const loadStatus = () => api.systemStatus().then(setStatus).catch(() => {})
@@ -216,12 +213,37 @@ export default function System() {
         return
       }
       if (result.status === 'warn') {
-        const warnings = result.checks.filter((item) => item.status === 'warn').map((item) => `${item.name}: ${item.message}`).join('\n')
-        const confirmed = window.confirm(`Preflight found warnings:\n\n${warnings}\n\nStart automation anyway?`)
-        if (!confirmed) {
-          setStarting(false)
-          return
-        }
+        const warnings = result.checks.filter((item) => item.status === 'warn')
+        setConfirmDialog({
+          open: true,
+          title: 'Preflight found warnings',
+          message: 'Review the warnings below, then decide whether to proceed.',
+          confirmLabel: 'Start Anyway',
+          destructive: false,
+          children: (
+            <ul className="space-y-1">
+              {warnings.map((item) => (
+                <li key={item.name}>
+                  <span className="font-medium text-amber-300">{item.name}:</span>{' '}
+                  <span className="text-gray-300">{item.message}</span>
+                </li>
+              ))}
+            </ul>
+          ),
+          onConfirm: async () => {
+            setConfirmDialog((d) => ({ ...d, open: false }))
+            try {
+              await api.startCycle()
+              toast('Automation cycle started', 'success')
+            } catch {
+              toast('Failed to start cycle', 'error')
+              setStarting(false)
+            }
+            setTimeout(loadStatus, 1500)
+          },
+          onCancel: () => setStarting(false),
+        })
+        return
       }
       await api.startCycle()
       toast('Automation cycle started', 'success')
@@ -1146,16 +1168,20 @@ export default function System() {
         </div>
       </div>
 
-      {/* Confirm dialog for destructive actions */}
+      {/* Shared confirm dialog — used for destructive actions and preflight-warning confirmations */}
       <ConfirmDialog
         open={confirmDialog.open}
         title={confirmDialog.title}
         message={confirmDialog.message}
         confirmLabel={confirmDialog.confirmLabel ?? 'Confirm'}
-        destructive
+        destructive={confirmDialog.destructive ?? true}
         loading={recyclingPurging || cleaning}
         onConfirm={confirmDialog.onConfirm}
-        onCancel={() => setConfirmDialog((d) => ({ ...d, open: false }))}
+        children={confirmDialog.children}
+        onCancel={() => {
+          setConfirmDialog((d) => ({ ...d, open: false }))
+          confirmDialog.onCancel?.()
+        }}
       />
     </div>
   )

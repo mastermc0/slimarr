@@ -111,6 +111,53 @@ class ScannerMediaProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("eac3", written.audio_codec)
         self.assertEqual(3200, written.bitrate)
 
+    async def test_scanner_infers_source_type_from_filename_for_new_movie(self):
+        cfg = SimpleNamespace(
+            plex=SimpleNamespace(url="http://plex", token="token", library_sections=[]),
+            tmdb=SimpleNamespace(api_key=""),
+            radarr=SimpleNamespace(enabled=False),
+            files=SimpleNamespace(
+                enable_media_probe=False,
+                nas_probe_enabled=False,
+                nas_path_prefixes=[],
+                media_probe_timeout_seconds=30,
+            ),
+        )
+        plex_movies = [
+            {
+                "plex_rating_key": "src123",
+                "title": "Source Movie",
+                "year": 2024,
+                "imdb_id": "tt7654321",
+                "tmdb_id": None,
+                "file_path": "F:/media/Source.Movie.2024.1080p.WEB-DL.x265-GRP.mkv",
+                "file_size": 1_000_000_000,
+                "resolution": "1080p",
+                "video_codec": "h265",
+                "audio_codec": "eac3",
+                "bitrate": 3200,
+            }
+        ]
+
+        session_factory = _SessionFactory()
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return plex_movies
+
+        with patch("backend.config.get_config", return_value=cfg), patch(
+            "backend.core.scanner.async_session", session_factory
+        ), patch("backend.core.scanner.emit_event", AsyncMock()), patch(
+            "backend.core.scanner.asyncio.to_thread", AsyncMock(side_effect=fake_to_thread)
+        ), patch(
+            "backend.integrations.plex.PlexClient.get_all_movies", return_value=plex_movies
+        ), patch(
+            "backend.integrations.tmdb.TMDBClient"
+        ):
+            await _run_scan()
+
+        written = session_factory.sessions[1].added[0]
+        self.assertEqual("web-dl", written.source_type)
+
 
 if __name__ == "__main__":
     unittest.main()

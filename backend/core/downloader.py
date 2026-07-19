@@ -97,6 +97,32 @@ async def _update_uploader_stats(release_title: str | None, success: bool) -> No
         await db.commit()
 
 
+async def get_uploader_health_scores(uploaders: list[str]) -> dict[str, float]:
+    """Batched uploader-health lookup for a whole search's candidates in one
+    query, via the normal async engine (works on SQLite and PostgreSQL alike).
+
+    Replaces per-candidate synchronous sqlite3 lookups in the comparer, which
+    ran on the event loop thread once per candidate (dozens to 100+ times per
+    movie search) and silently returned the 0.5 default for every uploader on
+    a PostgreSQL backend.
+    """
+    unique_uploaders = sorted({u for u in uploaders if u})
+    if not unique_uploaders:
+        return {}
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(UploaderStats.uploader, UploaderStats.health_score).where(
+                UploaderStats.uploader.in_(unique_uploaders)
+            )
+        )
+        return {
+            uploader: max(0.0, min(1.0, float(score)))
+            for uploader, score in result.all()
+            if score is not None
+        }
+
+
 async def start_download(search_result_id: int) -> Download:
     """Submit a search result to the active downloader. Returns the Download row."""
     config = get_config()

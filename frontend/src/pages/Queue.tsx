@@ -6,11 +6,10 @@ import { Clock, RefreshCw } from 'lucide-react'
 import { SkeletonTable } from '@/components/Skeleton'
 import { useToast } from '@/components/Toast'
 import EmptyState from '@/components/EmptyState'
+import { formatBytes } from '@/lib/format'
 
 function fmt(bytes?: number) {
-  if (!bytes) return '-'
-  const gb = bytes / 1e9
-  return gb >= 1 ? `${gb.toFixed(2)} GB` : `${(bytes / 1e6).toFixed(0)} MB`
+  return bytes ? formatBytes(bytes, 2) : '-'
 }
 
 function statusColor(status: string) {

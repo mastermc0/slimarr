@@ -4,6 +4,54 @@ All notable changes to Slimarr are documented here.
 
 ---
 
+## [1.9.0.0] - 2026-07-20
+
+Standalone release summary: `docs/CHANGELOG_v1.9.0.0.md`
+
+A full backend/frontend review pass, then a second pass working through the
+findings: a database reliability fix, a config feature that was fully wired
+but never actually did anything, and a batch of smaller correctness and
+consistency fixes across both codebases.
+
+- **Fixed the root cause of "database is locked" failures during downloads.**
+  SQLite was running in its default rollback-journal mode, which takes an
+  exclusive lock for the duration of any write — under concurrent access
+  (a scan running while a download gets inserted) this surfaced as
+  `OperationalError: database is locked`, visible repeatedly in production
+  logs. WAL mode plus a 30s busy-timeout are now set on every connection.
+- **Fixed `exclusions:` in config.yaml silently doing nothing.** The whole
+  config section (movie IDs, title keywords, folders, codecs, resolutions,
+  file-size floor, library-age ceiling) was defined and validated but never
+  read anywhere — meaning personal footage living in the same Plex library
+  as movies (home videos, wedding films) was being sent as search queries to
+  public Usenet indexers every cycle. Exclusions are now checked before a
+  search is ever issued, and there's a full Settings UI section to configure
+  them.
+- **Fixed `Movie.source_type` never being populated,** which silently
+  weakened the comparer's source-quality upgrade checks for every movie.
+  It's now set from the actual release title on replacement, and guessed
+  from the filename during scans for movies not yet replaced.
+- **Fixed uploader-health scoring blocking the event loop and always
+  returning the default score on PostgreSQL.** It ran a synchronous SQLite
+  query per candidate release (100+ times per movie search) and had no
+  PostgreSQL path at all. Replaced with one batched async query per search
+  that works on either database.
+- Fixed the rate-limit toast never firing for indexer-pause events, because
+  it matched on an exact prose string instead of the warning's actual
+  category — a machine-readable `code` is now attached to every
+  `search:warning` event.
+- Fixed the same file size being displayed differently on different pages
+  (some divided by 1e9, others by 2^30, both labeled "GB"). One shared
+  formatter now backs every size shown in the UI.
+- Sidebar navigation regrouped into labeled sections (Library, Activity,
+  System, Settings) with live failed/orphaned/active download badge counts,
+  instead of 13 links in a flat list.
+- Self-hosted the UI font instead of pulling it from Google Fonts on every
+  page load, replaced the last native `window.confirm` dialog with the
+  app's own styled confirmation modal, and unified the brand accent color
+  (the config had a stale, unused green that didn't match what the UI
+  actually painted everywhere).
+
 ## [1.8.0.0] - 2026-07-12
 
 Standalone release summary: `docs/CHANGELOG_v1.8.0.0.md`

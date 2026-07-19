@@ -50,6 +50,8 @@ class PlexClient:
                                 except ValueError:
                                     pass
 
+                        added_at = getattr(plex_movie, "addedAt", None)
+
                         movies.append({
                             "plex_rating_key": str(plex_movie.ratingKey),
                             "title": plex_movie.title,
@@ -65,6 +67,7 @@ class PlexClient:
                             "container": str(media.container or ""),
                             "width": media.width or 0,
                             "height": media.height or 0,
+                            "added_at": added_at.isoformat() if added_at else None,
                         })
         return movies
 

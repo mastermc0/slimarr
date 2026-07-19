@@ -7,6 +7,7 @@ import { SkeletonCard } from '@/components/Skeleton'
 import type { Movie, SearchResultItem } from '@/lib/types'
 import QualityBadge from '@/components/QualityBadge'
 import { ArrowLeft, Search, Zap, Download, Info, X, Lock, Unlock, Star, SlidersHorizontal, Save, Trash2 } from 'lucide-react'
+import { formatGB } from '@/lib/format'
 
 const qualityPriorityOptions = [
   { key: '4k', label: '4K' },
@@ -19,8 +20,7 @@ const qualityPriorityOptions = [
 ]
 
 function fmt(bytes?: number | null) {
-  if (!bytes) return '-'
-  return (bytes / 1e9).toFixed(2) + ' GB'
+  return bytes ? formatGB(bytes, 2) : '-'
 }
 
 function fmtAge(days?: number | null) {

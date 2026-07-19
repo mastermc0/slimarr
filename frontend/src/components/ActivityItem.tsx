@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import type { ActivityEntry } from '@/lib/types'
+import { formatBytes } from '@/lib/format'
 
 interface Props {
   entry: ActivityEntry
@@ -13,12 +14,6 @@ const eventLabels: Record<string, string> = {
   'scan:completed': 'Scan Completed',
 }
 
-function formatBytes(bytes?: number): string {
-  if (!bytes) return ''
-  const gb = bytes / 1e9
-  return gb >= 1 ? `${gb.toFixed(2)} GB` : `${(bytes / 1e6).toFixed(0)} MB`
-}
-
 function ActivityItem({ entry }: Props) {
   return (
     <div className="flex items-start gap-4 py-3 border-b border-gray-800">
@@ -28,7 +23,7 @@ function ActivityItem({ entry }: Props) {
       </div>
       {entry.savings_bytes != null && entry.savings_bytes > 0 && (
         <div className="text-right shrink-0">
-          <p className="text-sm text-green-400">−{formatBytes(entry.savings_bytes)}</p>
+          <p className="text-sm text-green-400">−{formatBytes(entry.savings_bytes, 2)}</p>
           <p className="text-xs text-gray-500">{entry.savings_pct?.toFixed(1)}%</p>
         </div>
       )}

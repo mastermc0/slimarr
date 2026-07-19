@@ -5,6 +5,7 @@ import TestConnectionButton from '@/components/TestConnectionButton'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { SkeletonCard } from '@/components/Skeleton'
 import { CheckCircle, Info, Plus, Trash2, XCircle } from 'lucide-react'
+import { formatBytes } from '@/lib/format'
 
 interface Indexer {
   enabled?: boolean
@@ -122,14 +123,6 @@ export default function Settings() {
 
     return { errors, warnings }
   }, [settings])
-
-  const formatBytes = (bytes: number) => {
-    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-    const units = ['B', 'KB', 'MB', 'GB', 'TB']
-    const idx = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-    const value = bytes / (1024 ** idx)
-    return `${value >= 10 || idx === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[idx]}`
-  }
 
   const loadRecyclingInfo = async (showLoading = false) => {
     if (showLoading) setRecyclingLoading(true)
@@ -753,6 +746,87 @@ export default function Settings() {
             <label htmlFor={key} className="text-sm">{label}</label>
           </div>
         ))}
+      </section>
+
+      <section id="exclusions" className="bg-gray-900 rounded-xl p-5 space-y-3 scroll-mt-4">
+        <div>
+          <h2 className="font-semibold">Exclusions</h2>
+          <p className="text-xs text-gray-400 mt-1">
+            Movies matching any rule below are skipped entirely — never searched, never sent to an indexer.
+            Use this to keep personal footage (home videos, wedding films) out of Usenet searches.
+          </p>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Title Keywords (comma-separated, case-insensitive substring match)</label>
+          <input
+            type="text"
+            value={((settings?.exclusions as Record<string,unknown>)?.title_keywords as string[] | undefined)?.join(', ') ?? ''}
+            onChange={(e) => {
+              const val = e.target.value.split(',').map((s) => s.trim()).filter(Boolean)
+              set(['exclusions', 'title_keywords'], val as unknown as string)
+            }}
+            className="w-full bg-gray-800 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-green"
+            placeholder="wedding, home video, birthday"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Excluded Folders (comma-separated path prefixes)</label>
+          <input
+            type="text"
+            value={((settings?.exclusions as Record<string,unknown>)?.folders as string[] | undefined)?.join(', ') ?? ''}
+            onChange={(e) => {
+              const val = e.target.value.split(',').map((s) => s.trim()).filter(Boolean)
+              set(['exclusions', 'folders'], val as unknown as string)
+            }}
+            className="w-full bg-gray-800 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-green"
+            placeholder="/data/home-videos, E:/media/personal"
+          />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Excluded Codecs (comma-separated)</label>
+            <input
+              type="text"
+              value={((settings?.exclusions as Record<string,unknown>)?.codecs as string[] | undefined)?.join(', ') ?? ''}
+              onChange={(e) => {
+                const val = e.target.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+                set(['exclusions', 'codecs'], val as unknown as string)
+              }}
+              className="w-full bg-gray-800 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-green"
+              placeholder="av1"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Excluded Resolutions (comma-separated)</label>
+            <input
+              type="text"
+              value={((settings?.exclusions as Record<string,unknown>)?.resolutions as string[] | undefined)?.join(', ') ?? ''}
+              onChange={(e) => {
+                const val = e.target.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+                set(['exclusions', 'resolutions'], val as unknown as string)
+              }}
+              className="w-full bg-gray-800 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-green"
+              placeholder="480p"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Excluded Movie IDs (comma-separated Slimarr movie IDs)</label>
+          <input
+            type="text"
+            value={((settings?.exclusions as Record<string,unknown>)?.movie_ids as number[] | undefined)?.join(', ') ?? ''}
+            onChange={(e) => {
+              const val = e.target.value.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n))
+              set(['exclusions', 'movie_ids'], val as unknown as string)
+            }}
+            className="w-full bg-gray-800 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-green"
+            placeholder="14, 87, 213"
+          />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {field('Minimum File Size (MB, 0 = disabled)', ['exclusions', 'minimum_file_size_mb'], 'number', 'Movies smaller than this are skipped — useful for excluding trailers/extras mixed into the library.')}
+          {field('Maximum Library Age (days, 0 = disabled)', ['exclusions', 'maximum_age_days'], 'number', 'Only movies added to Plex within this many days are considered. Older back-catalog entries are left alone.')}
+        </div>
       </section>
 
       {/* Files */}

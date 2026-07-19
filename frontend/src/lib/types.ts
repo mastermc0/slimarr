@@ -76,6 +76,12 @@ export interface OrphanedDownload {
   age_hours?: number
 }
 
+export interface QueueSummary {
+  active: number
+  failed: number
+  orphaned: number
+}
+
 export interface BlacklistEntry {
   id: number
   release_title: string
@@ -208,7 +214,7 @@ export interface SearchDiagnostics {
     last_successful_search?: Record<string, unknown> | null
   }
   recent_events: SearchDiagnosticEvent[]
-  warnings: Array<{ timestamp: string; message: string; detail?: Record<string, unknown> }>
+  warnings: Array<{ timestamp: string; message: string; code?: string; detail?: Record<string, unknown> }>
   failure_heatmap: Record<string, number>
   indexer_reliability: Record<string, Record<string, unknown>>
   last_successful_search?: Record<string, unknown> | null

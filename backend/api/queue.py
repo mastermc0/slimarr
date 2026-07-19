@@ -2,13 +2,41 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from backend.api.models import DownloadOut, OrphanCleanupResponse, ResumeDownloadsResponse, RetryDownloadResponse
+from backend.api.models import (
+    DownloadOut,
+    OrphanCleanupResponse,
+    QueueSummaryResponse,
+    ResumeDownloadsResponse,
+    RetryDownloadResponse,
+)
 from backend.auth.dependencies import get_current_user
-from backend.database import Download, async_session
+from backend.database import Download, OrphanedDownload, async_session
 
 router = APIRouter(prefix="/queue", tags=["queue"])
+
+
+@router.get("/summary", response_model=QueueSummaryResponse)
+async def get_queue_summary(user=Depends(get_current_user)):
+    """Cheap counts-only endpoint for sidebar badges — avoids fetching full
+    download/orphan lists just to show how many of each there are."""
+    async with async_session() as db:
+        active = (await db.execute(
+            select(func.count()).select_from(Download).where(
+                Download.status.in_(["submitting", "downloading"])
+            )
+        )).scalar_one()
+        failed = (await db.execute(
+            select(func.count()).select_from(Download).where(Download.status == "failed")
+        )).scalar_one()
+        orphaned = (await db.execute(
+            select(func.count()).select_from(OrphanedDownload).where(
+                OrphanedDownload.cleanup_scheduled == False  # noqa: E712
+            )
+        )).scalar_one()
+
+    return {"active": active, "failed": failed, "orphaned": orphaned}
 
 
 @router.get("/active", response_model=list[DownloadOut])

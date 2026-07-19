@@ -1,0 +1,1 @@
+const r=["B","KB","MB","GB","TB","PB"];function B(t,i=1){if(!t||!Number.isFinite(t)||t<=0)return"0 B";const n=Math.min(Math.floor(Math.log(t)/Math.log(1024)),r.length-1),o=t/1024**n;return`${n===0?o.toFixed(0):o.toFixed(i)} ${r[n]}`}function a(t,i=1){return!t||!Number.isFinite(t)||t<=0?"0 GB":`${(t/1024**3).toFixed(i)} GB`}export{B as a,a as f};

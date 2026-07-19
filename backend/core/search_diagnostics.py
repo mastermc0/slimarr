@@ -195,13 +195,21 @@ def record_indexer_request(
     )
 
 
-async def emit_search_warning(message: str, detail: dict[str, Any] | None = None) -> None:
+async def emit_search_warning(
+    message: str, detail: dict[str, Any] | None = None, *, code: str | None = None
+) -> None:
+    """Emit a search:warning event.
+
+    `code` is a stable, machine-readable category (e.g. "rate_limited") for
+    clients to match on. `message` is free-form prose meant for logs/history
+    and can be reworded without breaking anything that keys off `code`.
+    """
     detail = detail or {}
     with _lock:
         for existing in list(_warnings)[:10]:
             if existing.get("message") == message and existing.get("detail") == detail:
                 return
-        warning = {"timestamp": utc_now(), "message": message, "detail": detail}
+        warning = {"timestamp": utc_now(), "message": message, "detail": detail, "code": code}
         _warnings.appendleft(warning)
     _append_history_record("warning", warning)
     await emit_event("search:warning", warning)
@@ -359,16 +367,19 @@ async def record_movie_search_completed(
         await emit_search_warning(
             "Search is not configured: no enabled Prowlarr instance and no direct indexers.",
             {"movie_id": movie_id, "title": title},
+            code="search_not_configured",
         )
     elif zero_searches == 100:
         await emit_search_warning(
             "Search pipeline has returned zero raw results for 100 consecutive movies.",
             {"movie_id": movie_id, "title": title},
+            code="zero_results_streak",
         )
     elif failed_searches == 10:
         await emit_search_warning(
             "All attempted search providers are failing repeatedly.",
             {"movie_id": movie_id, "title": title},
+            code="search_failing",
         )
 
 

@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/react-18-61DAFB?logo=react&logoColor=black" />
   <img src="https://img.shields.io/badge/license-MIT-green" />
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20Docker%20%7C%20Windows-0ea5e9" />
-  <img src="https://img.shields.io/badge/release-1.8.0.0-success" />
+  <img src="https://img.shields.io/badge/release-1.9.0.0-success" />
 </p>
 
 <p align="center">
@@ -36,7 +36,40 @@ Scan Plex library -> Search Usenet indexers -> Compare releases
 
 Slimarr is designed to look and feel like a native member of the **\*arr ecosystem** (Radarr, Sonarr, Prowlarr). If you're familiar with those tools, you'll feel right at home.
 
-Current release: **1.8.0.0** (2026-07-12).
+Current release: **1.9.0.0** (2026-07-20).
+
+### What's New in 1.9.0.0 - Full Codebase Review, Config Correctness, and Navigation Rework
+
+- **Fixed `exclusions:` in config.yaml silently doing nothing.** The whole
+  section (movie IDs, title keywords, folders, codecs, resolutions, a
+  minimum file size, a maximum library age) was defined and validated but
+  never read anywhere — personal footage living in the same Plex library as
+  movies (home videos, wedding films) was being sent as search queries to
+  public Usenet indexers every cycle. Exclusions are now checked before a
+  search is ever issued, with a full Settings UI section to configure them.
+- **Fixed the root cause of "database is locked" failures during
+  downloads.** SQLite was running in its default rollback-journal mode,
+  which takes an exclusive lock for the duration of any write. WAL mode
+  plus a busy-timeout are now set on every connection.
+- **Fixed `Movie.source_type` never being populated,** which silently
+  weakened the comparer's source-quality upgrade checks for every movie.
+  It's now set from the actual release title on replacement, and guessed
+  from the filename during scans for movies not yet replaced.
+- **Fixed uploader-health scoring blocking the event loop and always
+  returning the default score on PostgreSQL** — replaced a per-candidate
+  synchronous SQLite query (100+ times per movie search) with one batched
+  async query per search that works on either database.
+- Fixed the rate-limit toast never firing for one of its two trigger paths,
+  fixed the same file size showing different numbers on different pages,
+  and fixed TV endpoints swallowing errors without logging them.
+- **Sidebar navigation regrouped** into labeled sections (Library, Activity,
+  System, Settings) with live failed/orphaned/active download badge counts,
+  instead of 13 links in a flat list.
+- Self-hosted the UI font instead of pulling it from Google Fonts on every
+  page load, replaced the last native `window.confirm` dialog with the
+  app's own styled confirmation modal, and unified the brand accent color.
+
+Full standalone release notes: `docs/CHANGELOG_v1.9.0.0.md`.
 
 ### What's New in 1.8.0.0 - Optimization, Observability, and Premium Polish Pass
 

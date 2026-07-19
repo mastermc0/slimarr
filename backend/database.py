@@ -67,6 +67,23 @@ engine = create_async_engine(DATABASE_URL, **_engine_kwargs)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
+if get_db_backend() == "sqlite":
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, connection_record):
+        """WAL mode lets readers (API requests, dashboard queries) proceed
+        while a writer (a scan or replacement) holds the connection, instead
+        of blocking behind SQLite's default rollback-journal exclusive lock.
+        busy_timeout makes any remaining lock contention retry for a few
+        seconds instead of raising "database is locked" immediately, which
+        was the dominant error in production logs under concurrent writes.
+        """
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
+
+
 @event.listens_for(engine.sync_engine, "before_cursor_execute")
 def _before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
     context._query_start_time = time.perf_counter()
@@ -114,6 +131,7 @@ class Movie(Base):
     audio_codec: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     bitrate: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # kbps
     source_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    added_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # Plex library-add time
 
     # Tracking
     original_file_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -513,7 +531,7 @@ async def _add_column_if_missing(
 
 # Current migration generation - increment whenever a new migration step is added
 # to _run_lightweight_migrations().  Used in diagnostics bundle.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 async def _run_lightweight_migrations(conn) -> None:
@@ -559,6 +577,7 @@ async def _run_lightweight_migrations(conn) -> None:
     await _add_column_if_missing(conn, "movies", movie_columns, "force_keep", "INTEGER DEFAULT 0")
     await _add_column_if_missing(conn, "movies", movie_columns, "allow_larger_replacements", "INTEGER DEFAULT 0")
     await _add_column_if_missing(conn, "movies", movie_columns, "quality_profile_overrides", "TEXT")
+    await _add_column_if_missing(conn, "movies", movie_columns, "added_at", "DATETIME")
 
     activity_columns = await _table_columns(conn, "activity_log")
     await _add_column_if_missing(conn, "activity_log", activity_columns, "actor", "VARCHAR")

@@ -113,6 +113,7 @@ class ProwlarrClient:
                         "status_code": resp.status_code if resp else None,
                         "error": error,
                     },
+                    code="rate_limited",
                 )
             return {
                 "indexer_name": "Prowlarr",

@@ -72,9 +72,9 @@ async def list_shows(
     plex = PlexClient()
 
     try:
-        loop = asyncio.get_event_loop()
-        shows = await loop.run_in_executor(None, plex.get_all_shows)
+        shows = await asyncio.to_thread(plex.get_all_shows)
     except Exception as e:
+        logger.error("TV shows list failed: Plex query error: {}", e)
         raise service_unavailable("Plex", correlation_id=get_correlation_id())
 
     # Apply stale filter
@@ -161,8 +161,7 @@ async def delete_show(
 
     # Step 2: Delete from Plex (removes files from disk)
     try:
-        loop = asyncio.get_event_loop()
-        deleted = await loop.run_in_executor(None, plex.delete_show, plex_rating_key)
+        deleted = await asyncio.to_thread(plex.delete_show, plex_rating_key)
         result["plex_deleted"] = deleted
         if deleted:
             logger.info(f"TV Cleanup: Deleted '{body.title}' from Plex and disk")
