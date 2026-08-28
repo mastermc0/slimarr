@@ -447,7 +447,6 @@ async def metrics():
     No authentication required so Prometheus can scrape without credentials.
     Exposes basic counters/gauges for operational observability.
     """
-    from backend.config import get_config
     from backend.utils.platform import disk_free_bytes, is_docker
 
     lines: list[str] = []
@@ -473,7 +472,6 @@ async def metrics():
     uptime_seconds = int((datetime.now(timezone.utc) - _start_time).total_seconds())
     _gauge("slimarr_uptime_seconds", uptime_seconds, help_text="Seconds since process start")
 
-    cfg = get_config()
     _gauge("slimarr_info", 1, labels={"version": CURRENT_VERSION, "in_docker": str(is_docker()).lower()}, help_text="Slimarr build info")
 
     try:

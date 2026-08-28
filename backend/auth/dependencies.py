@@ -21,7 +21,6 @@ async def get_current_user(
     2. Bearer JWT token (UI login)
     Returns the username string on success.
     """
-    from typing import Optional  # local import avoids top-level issues
 
     config = get_config()
 

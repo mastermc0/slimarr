@@ -19,6 +19,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import loguru
+
 from datetime import timezone
 
 from loguru import logger

@@ -166,11 +166,11 @@ async def scan_and_clean_duplicates() -> dict:
     except Exception as e:
         logger.error(f"Plex connection failed during duplicate scan: {e}")
         return {"movies_scanned": 0, "duplicates_found": 0, "files_removed": 0, "bytes_reclaimed": 0, "errors": 1}
-    
+
     sections = plex.library_sections or [
         s.title for s in server.library.sections() if s.type == "movie"
     ]
-    
+
     summary = {
         "movies_scanned": 0,
         "duplicates_found": 0,
@@ -255,5 +255,5 @@ async def scan_and_clean_duplicates() -> dict:
         # Only refresh this section if we actually removed files from it
         if section_files_removed > 0:
             server.library.section(section_name).update()
-            
+
     return summary
