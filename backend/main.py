@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.config import ensure_secrets, get_config, load_config
+from backend.config import get_config
 from backend.database import init_db
 from backend.realtime.sio_instance import sio
 from backend.scheduler.scheduler import start_scheduler
@@ -29,6 +29,18 @@ from backend.utils.responses import (
 
 import socketio
 import httpx
+
+# ── API Routers ───────────────────────────────────────────────────────
+from backend.api.activity import router as activity_router
+from backend.api.dashboard import router as dashboard_router
+from backend.api.images import router as images_router
+from backend.api.jobs import router as jobs_router
+from backend.api.library import router as library_router
+from backend.api.queue import router as queue_router
+from backend.api.settings import router as settings_router
+from backend.api.system import router as system_router
+from backend.api.tv import router as tv_router
+from backend.auth.router import router as auth_router
 
 # Shared async HTTP client — reused across all integrations for connection pooling
 _http_client: httpx.AsyncClient | None = None
@@ -171,18 +183,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ── API Routers ───────────────────────────────────────────────────────
-from backend.api.activity import router as activity_router
-from backend.api.dashboard import router as dashboard_router
-from backend.api.images import router as images_router
-from backend.api.jobs import router as jobs_router
-from backend.api.library import router as library_router
-from backend.api.queue import router as queue_router
-from backend.api.settings import router as settings_router
-from backend.api.system import router as system_router
-from backend.api.tv import router as tv_router
-from backend.auth.router import router as auth_router
 
 API_PREFIX = "/api/v1"
 
